@@ -1,0 +1,72 @@
+/* 消息里的 Markdown：排版参照 Claude 网页端，正文无衬线、段落间距紧凑、
+   标题只加重少量字重、代码块与表格用 1px 边框。 */
+
+.md {
+  line-height: 1.68;
+  overflow-wrap: anywhere;
+}
+
+.md > :first-child { margin-top: 0; }
+.md > :last-child { margin-bottom: 0; }
+
+.md :global(p) { margin: 0 0 0.85em; }
+.md :global(h1), .md :global(h2), .md :global(h3), .md :global(h4) {
+  margin: 1.3em 0 0.55em;
+  font-family: inherit;
+  font-weight: 600;
+  line-height: 1.35;
+  letter-spacing: -0.003em;
+}
+.md :global(h1) { font-size: 1.3em; }
+.md :global(h2) { font-size: 1.18em; }
+.md :global(h3) { font-size: 1.08em; }
+.md :global(h4) { font-size: 1em; }
+
+.md :global(strong) { font-weight: 600; }
+
+.md :global(ul), .md :global(ol) { margin: 0 0 0.85em; padding-left: 1.5em; list-style: revert; }
+.md :global(li) { margin: 0.25em 0; }
+.md :global(li > p) { margin: 0; }
+
+.md :global(blockquote) {
+  margin: 0 0 0.85em;
+  padding: 0.15em 0 0.15em 0.95em;
+  border-left: 3px solid var(--sc-border-strong);
+  color: var(--sc-text-dim);
+}
+
+.md :global(code) {
+  padding: 0.12em 0.34em;
+  border-radius: 5px;
+  background: var(--sc-bg-sunken);
+  font-family: var(--sc-font-mono);
+  font-size: 0.875em;
+}
+
+.md :global(pre) {
+  margin: 0 0 0.9em;
+  padding: 12px 14px;
+  overflow-x: auto;
+  border: 1px solid var(--sc-border);
+  border-radius: 10px;
+  background: var(--sc-bg-sunken);
+  white-space: pre;
+  word-break: normal;
+}
+.md :global(pre code) { padding: 0; background: transparent; font-size: 12.5px; line-height: 1.6; }
+
+.md :global(table) {
+  margin: 0 0 0.9em;
+  border-collapse: collapse;
+  font-size: 0.92em;
+  display: block;
+  overflow-x: auto;
+}
+.md :global(th), .md :global(td) { padding: 5px 10px; border: 1px solid var(--sc-border); text-align: left; }
+.md :global(th) { background: var(--sc-bg-sunken); font-weight: 600; }
+
+.md :global(a) { color: var(--sc-accent-strong); text-decoration: underline; text-underline-offset: 2px; }
+.md :global(hr) { margin: 1.2em 0; border: 0; border-top: 1px solid var(--sc-border); }
+
+.md :global(.sc-math-block) { margin: 0 0 0.9em; overflow-x: auto; overflow-y: hidden; }
+.md :global(.katex) { font-size: 1.04em; }

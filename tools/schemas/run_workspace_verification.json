@@ -1,0 +1,14 @@
+{
+  "name": "run_workspace_verification",
+  "description": "Run the workspace verification command and return its output.",
+  "mutating": true,
+  "parameters": {
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "type": "object",
+    "properties": {
+      "custom_cmd": {
+        "type": "string"
+      }
+    }
+  }
+}

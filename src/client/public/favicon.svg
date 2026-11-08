@@ -1,0 +1,58 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 585 630" width="100%" height="100%">
+  <defs>
+
+    <!-- 上半段深色丝带光影渐变 -->
+    <linearGradient id="topRibbonGrad" x1="10%" y1="85%" x2="90%" y2="15%">
+      <stop offset="0%" stop-color="#242527" />
+      <stop offset="55%" stop-color="#2c2e31" />
+      <stop offset="85%" stop-color="#36383c" />
+      <stop offset="100%" stop-color="#5c5e62" />
+    </linearGradient>
+
+    <!-- 下半段深色丝带光影渐变 -->
+    <linearGradient id="bottomRibbonGrad" x1="12%" y1="88%" x2="88%" y2="20%">
+      <stop offset="0%" stop-color="#7c7e82" />
+      <stop offset="18%" stop-color="#323437" />
+      <stop offset="60%" stop-color="#232426" />
+      <stop offset="100%" stop-color="#1b1c1e" />
+    </linearGradient>
+
+    <!-- 中间内侧翻转面立体灰白渐变 -->
+    <linearGradient id="innerFoldGrad" x1="0%" y1="45%" x2="100%" y2="55%">
+      <stop offset="0%" stop-color="#e3e3e1" />
+      <stop offset="40%" stop-color="#cfcfcd" />
+      <stop offset="75%" stop-color="#969799" />
+      <stop offset="100%" stop-color="#525356" />
+    </linearGradient>
+  </defs>
+
+  <!-- 1. 中心翻转内侧浅灰折面（底层衔接） -->
+  <path d="M 227 379
+           C 192 355, 196 292, 265 259
+           C 305 258, 332 260, 357 266
+           C 396 286, 395 348, 312 386
+           C 278 386, 250 384, 227 379
+           Z" fill="url(#innerFoldGrad)" />
+
+  <!-- 2. 上半段深色丝带 -->
+  <path d="M 227 379
+           L 96 319
+           C 46 294, 45 212, 99 177
+           L 314 48
+           C 344 30, 368 29, 396 48
+           L 501 116
+           L 265 259
+           C 195 292, 192 355, 227 379
+           Z" fill="url(#topRibbonGrad)" />
+
+  <!-- 3. 下半段深色丝带 -->
+  <path d="M 357 266
+           L 490 326
+           C 542 350, 543 428, 498 457
+           L 286 584
+           C 256 601, 232 599, 204 582
+           L 97 512
+           L 312 386
+           C 395 348, 396 286, 357 266
+           Z" fill="url(#bottomRibbonGrad)" />
+</svg>

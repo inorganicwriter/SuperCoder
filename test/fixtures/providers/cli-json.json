@@ -1,0 +1,46 @@
+{
+  "provider": "codex-cli",
+  "level": 2,
+  "fixtures": [
+    {
+      "name": "outfile-wins",
+      "stdout": "{\"msg\":{\"type\":\"agent_message\",\"message\":\"中间过程\"}}\n",
+      "stderr": "",
+      "code": 0,
+      "outFile": "最终答案：改完了三个文件。",
+      "expect": { "status": "ok", "answer": "最终答案：改完了三个文件。" }
+    },
+    {
+      "name": "jsonl-fallback",
+      "stdout": "{\"msg\":{\"type\":\"agent_message\",\"phase\":\"final_answer\",\"message\":\"只用 JSONL 也能取到\"}}\n",
+      "stderr": "",
+      "code": 0,
+      "outFile": null,
+      "expect": { "status": "ok", "answer": "只用 JSONL 也能取到" }
+    },
+    {
+      "name": "unauthorized",
+      "stdout": "",
+      "stderr": "401 Unauthorized: please login",
+      "code": 1,
+      "outFile": null,
+      "expect": { "status": "failed", "category": "auth" }
+    },
+    {
+      "name": "empty",
+      "stdout": "",
+      "stderr": "",
+      "code": 0,
+      "outFile": null,
+      "expect": { "status": "failed", "category": "invalid-result" }
+    },
+    {
+      "name": "partial-then-tool",
+      "stdout": "{\"msg\":{\"type\":\"agent_message\",\"phase\":\"partial_answer\",\"message\":\"先这样\"}}\n{\"msg\":{\"type\":\"tool_call\",\"message\":\"\"}}\n",
+      "stderr": "",
+      "code": 0,
+      "outFile": null,
+      "expect": { "status": "failed", "category": "invalid-result" }
+    }
+  ]
+}

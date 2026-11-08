@@ -1,0 +1,148 @@
+/**
+ * 基础样式。只做重置与排版基线，具体布局在各组件的 CSS Module 里。
+ */
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body,
+#root {
+  height: 100%;
+  margin: 0;
+}
+
+body {
+  background: var(--sc-bg);
+  color: var(--sc-text);
+  font-family: var(--sc-font);
+  font-size: var(--sc-fs-md);
+  line-height: 1.55;
+  -webkit-font-smoothing: antialiased;
+}
+
+/* 按钮默认是"次要"样式：白底、细描边、34px 高。
+   这里的规则全部包在 :where() 里，优先级为 0：任何组件里的类名都能覆盖，
+   否则全局的 hover/高度会渗进文件树、菜单这类自绘按钮。 */
+:where(button) {
+  font: inherit;
+  font-size: var(--sc-fs-sm);
+  color: var(--sc-text);
+  background: var(--sc-bg-raised);
+  border: 1px solid var(--sc-border);
+  border-radius: var(--sc-radius-sm);
+  min-height: var(--sc-control-h);
+  padding: 0 var(--sc-space-3);
+  cursor: pointer;
+  transition: border-color 120ms ease, background-color 120ms ease, color 120ms ease;
+}
+
+:where(button:hover:not(:disabled)) {
+  border-color: var(--sc-border-strong);
+  background: color-mix(in srgb, var(--sc-bg-raised) 88%, var(--sc-text) 12%);
+}
+
+:where(button:disabled) {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
+:where(button, input, select, textarea, a, [tabindex]):where(:focus-visible) {
+  outline: none;
+  box-shadow: var(--sc-focus);
+  border-color: var(--sc-accent-line);
+}
+
+:where(input, select, textarea) {
+  font: inherit;
+  font-size: var(--sc-fs-sm);
+  color: var(--sc-text);
+  background: var(--sc-bg-raised);
+  border: 1px solid var(--sc-border-strong);
+  border-radius: var(--sc-radius-sm);
+  min-height: var(--sc-control-h);
+  padding: 0 var(--sc-space-3);
+}
+
+:where(input, textarea)::placeholder {
+  color: var(--sc-text-faint);
+}
+
+:where(input:focus, select:focus, textarea:focus) {
+  outline: none;
+  border-color: var(--sc-accent-line);
+  box-shadow: var(--sc-focus);
+}
+
+/* select 原生箭头去掉，换成右侧的一个小三角，和按钮的观感对齐。 */
+:where(select) {
+  appearance: none;
+  padding-right: 28px;
+  background-image: linear-gradient(45deg, transparent 50%, var(--sc-text-dim) 50%),
+    linear-gradient(135deg, var(--sc-text-dim) 50%, transparent 50%);
+  background-position: calc(100% - 15px) calc(50% + 1px), calc(100% - 11px) calc(50% + 1px);
+  background-size: 4px 4px, 4px 4px;
+  background-repeat: no-repeat;
+}
+
+h1,
+h2,
+h3 {
+  margin: 0;
+  font-family: var(--sc-font-display);
+  font-weight: 400;
+  letter-spacing: -0.005em;
+}
+
+ul {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+code,
+pre {
+  font-family: var(--sc-font-mono);
+  font-size: var(--sc-fs-sm);
+}
+
+pre {
+  margin: 0;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+
+::-webkit-scrollbar-thumb {
+  background: color-mix(in srgb, var(--sc-border) 70%, transparent);
+  border-radius: 10px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: var(--sc-border-strong);
+}
+
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+/* 通知跳转后的定位提示（见 App.tsx 的 flash()）：用 box-shadow 描边，不影响已有圆角；
+   动画重复两次，避免被未察觉。 */
+@keyframes sc-flash {
+  0%,
+  100% {
+    box-shadow: 0 0 0 0 transparent;
+  }
+  40% {
+    box-shadow: 0 0 0 3px var(--sc-accent-line);
+  }
+}
+
+.sc-flash {
+  animation: sc-flash 1.1s ease-out 2;
+}

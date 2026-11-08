@@ -1,0 +1,168 @@
+.bar {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sc-space-4);
+  padding: var(--sc-space-3);
+}
+
+.section {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sc-space-2);
+}
+
+.heading {
+  font-size: var(--sc-fs-xs);
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--sc-text-faint);
+}
+
+.list {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.item,
+.itemActive {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--sc-space-2);
+  width: 100%;
+  text-align: left;
+  padding: var(--sc-space-1) var(--sc-space-2);
+  background: transparent;
+  border-color: transparent;
+  font-size: var(--sc-fs-sm);
+  color: var(--sc-text-dim);
+}
+
+.itemActive {
+  background: var(--sc-bg-raised);
+  border-color: var(--sc-border);
+  color: var(--sc-text);
+}
+
+.name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.meta {
+  color: var(--sc-text-faint);
+  font-size: var(--sc-fs-xs);
+}
+
+.pill {
+  font-size: var(--sc-fs-xs);
+  color: var(--sc-accent-strong);
+  border: 1px solid var(--sc-accent);
+  border-radius: 999px;
+  padding: 0 var(--sc-space-1);
+}
+
+.addRow {
+  display: flex;
+  gap: var(--sc-space-1);
+}
+
+/* 「选择文件夹…」：走系统对话框，所以是主按钮而不是输入框。 */
+.pick {
+  width: 100%;
+  padding: 8px 12px;
+  border: 1px solid var(--sc-border);
+  border-radius: 10px;
+  background: var(--sc-bg-raised);
+  color: var(--sc-text);
+  font: inherit;
+  font-size: 12.5px;
+  cursor: pointer;
+}
+
+.pick:hover:not(:disabled) {
+  border-color: var(--sc-accent);
+  color: var(--sc-accent-strong);
+}
+
+.pick:disabled {
+  cursor: progress;
+  opacity: 0.6;
+}
+
+.addRow input {
+  flex: 1;
+  min-width: 0;
+}
+
+.primary {
+  background: var(--sc-accent-soft);
+  border-color: var(--sc-accent-line);
+}
+
+.hint {
+  margin: 0;
+  color: var(--sc-text-faint);
+  font-size: var(--sc-fs-xs);
+}
+
+/* 工作区行：主按钮 + 移除按钮 */
+.row {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+}
+
+.row .item,
+.row .itemActive {
+  flex: 1 1 auto;
+  min-width: 0;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 1px;
+}
+
+.path {
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--sc-text-faint);
+  font-size: 11.5px;
+}
+
+.remove {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: 0 0 auto;
+  width: 24px;
+  height: 24px;
+  min-height: 0;
+  padding: 0;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--sc-text-faint);
+  cursor: pointer;
+  opacity: 0;
+  transition: opacity 120ms ease, background 120ms ease, color 120ms ease;
+}
+
+.row:hover .remove,
+.remove:focus-visible {
+  opacity: 1;
+}
+
+.remove:hover {
+  background: var(--sc-bg-sunken);
+  color: var(--sc-danger);
+}
+
+.empty {
+  margin: 0;
+  color: var(--sc-text-faint);
+  font-size: 12.5px;
+}

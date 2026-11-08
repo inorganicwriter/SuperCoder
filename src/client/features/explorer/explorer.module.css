@@ -1,0 +1,263 @@
+/**
+ * 右侧文件栏样式。窄栏、等宽预览、树用缩进表达层级，和侧栏同一套纸色。
+ */
+
+.panel {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  width: 320px;
+  flex: none;
+  min-height: 0;
+  border-left: 1px solid var(--sc-border);
+  background: var(--sc-bg-raised);
+}
+
+/* 左边缘的拖动条：平时不可见，悬停/拖动时显示一条细线。双击恢复默认宽度。 */
+.resizer {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: -3px;
+  z-index: 5;
+  width: 6px;
+  cursor: col-resize;
+}
+
+.resizer:hover,
+.resizer:active {
+  background: linear-gradient(to right, transparent 2px, var(--sc-border-strong) 2px, var(--sc-border-strong) 4px, transparent 4px);
+}
+
+.head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 10px 12px;
+  border-bottom: 1px solid var(--sc-border);
+}
+
+.tabs {
+  display: flex;
+  gap: 2px;
+  flex: 1;
+  padding: 2px;
+  border: 1px solid var(--sc-border);
+  border-radius: 9px;
+  background: var(--sc-bg-sunken);
+}
+
+.tab {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  flex: 1;
+  justify-content: center;
+  padding: 4px 8px;
+  border: 0;
+  border-radius: 7px;
+  background: transparent;
+  color: var(--sc-text-dim);
+  font: inherit;
+  font-size: 12.5px;
+  cursor: pointer;
+}
+
+.tabOn {
+  background: var(--sc-bg-raised);
+  color: var(--sc-text);
+  box-shadow: 0 1px 2px rgb(20 20 19 / 10%);
+}
+
+.count {
+  padding: 0 5px;
+  border-radius: 999px;
+  background: var(--sc-accent);
+  color: #fff;
+  font-size: 11px;
+  line-height: 16px;
+}
+
+.refresh {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: none;
+  width: 24px;
+  height: 24px;
+  min-height: 0;
+  padding: 0;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--sc-text-faint);
+  font: inherit;
+  cursor: pointer;
+  transition: background 120ms ease, color 120ms ease;
+}
+
+.refresh:hover {
+  background: var(--sc-bg-sunken);
+  color: var(--sc-text);
+}
+
+.tree {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-y: auto;
+  padding: 6px 0;
+}
+
+.row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  width: 100%;
+  min-height: 0;
+  padding: 4px 10px;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  color: var(--sc-text-dim);
+  font: inherit;
+  font-size: 12.5px;
+  line-height: 1.6;
+  text-align: left;
+  cursor: pointer;
+}
+
+.row:hover {
+  background: var(--sc-bg-sunken);
+  color: var(--sc-text);
+}
+
+.rowActive,
+.rowActive:hover {
+  background: var(--sc-bg-sunken);
+  color: var(--sc-text);
+}
+
+/* 文件树是鼠标为主的列表：选中靠底色表达，不要聚焦环。 */
+.row:focus-visible {
+  outline: none;
+  box-shadow: none;
+  background: var(--sc-bg-sunken);
+}
+
+.caret {
+  flex: none;
+  width: 10px;
+  color: var(--sc-text-faint);
+  font-size: 10px;
+}
+
+.name {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.mark {
+  margin-left: auto;
+  color: var(--sc-accent);
+  font-size: 9px;
+}
+
+.status {
+  flex: none;
+  width: 16px;
+  color: var(--sc-accent);
+  font-family: var(--sc-font-mono);
+  font-size: 11px;
+}
+
+.branch,
+.empty {
+  margin: 0;
+  padding: 8px 12px;
+  color: var(--sc-text-faint);
+  font-size: 12px;
+  line-height: 1.6;
+}
+
+.branch {
+  color: var(--sc-text-dim);
+  font-family: var(--sc-font-mono);
+}
+
+.error {
+  margin: 8px 10px 0;
+  padding: 8px 10px;
+  border: 1px solid var(--sc-border);
+  border-radius: 8px;
+  background: var(--sc-bg-sunken);
+  color: var(--sc-danger);
+  font-size: 12px;
+  line-height: 1.6;
+}
+
+/* 预览区高度由比例决定（默认一半，可拖动），不再被文件树挤到底部。 */
+.preview {
+  position: relative;
+  flex: none;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  border-top: 1px solid var(--sc-border);
+}
+
+.previewHead {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 10px;
+  border-bottom: 1px solid var(--sc-border);
+}
+
+.previewPath {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--sc-text);
+  font-family: var(--sc-font-mono);
+  font-size: 11.5px;
+}
+
+.previewSize {
+  flex: none;
+  color: var(--sc-text-faint);
+  font-size: 11px;
+}
+
+.code {
+  flex: 1 1 auto;
+  min-height: 0;
+  margin: 0;
+  padding: 10px 12px;
+  overflow: auto;
+  color: var(--sc-text);
+  font-family: var(--sc-font-mono);
+  font-size: 11.5px;
+  line-height: 1.65;
+  tab-size: 2;
+  white-space: pre;
+}
+
+/* 预览区上沿的拖动条：平时不可见，悬停/拖动时显示一条细线。双击恢复一半。 */
+.splitter {
+  position: absolute;
+  top: -3px;
+  left: 0;
+  right: 0;
+  z-index: 5;
+  height: 6px;
+  cursor: row-resize;
+}
+
+.splitter:hover,
+.splitter:active {
+  background: linear-gradient(to bottom, transparent 2px, var(--sc-border-strong) 2px, var(--sc-border-strong) 4px, transparent 4px);
+}

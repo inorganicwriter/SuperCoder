@@ -1,0 +1,315 @@
+/* 右栏各面板共用样式。 */
+
+.stack {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sc-space-4);
+}
+
+.section {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sc-space-2);
+}
+
+.sectionHead {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--sc-space-2);
+}
+
+.heading {
+  font-size: var(--sc-fs-xs);
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--sc-text-faint);
+}
+
+.list {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sc-space-2);
+}
+
+.card {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sc-space-1);
+  padding: var(--sc-space-2);
+  border: 1px solid var(--sc-border);
+  border-radius: var(--sc-radius);
+  background: var(--sc-bg-raised);
+}
+
+.cardHead {
+  display: flex;
+  align-items: center;
+  gap: var(--sc-space-2);
+  flex-wrap: wrap;
+  font-size: var(--sc-fs-xs);
+}
+
+.badge {
+  /* 徽标不参与收缩、不换行：列宽不足时由右侧标题承担压缩。 */
+  flex: 0 0 auto;
+  white-space: nowrap;
+  padding: 0 var(--sc-space-1);
+  border-radius: var(--sc-radius-sm);
+  background: var(--sc-bg-sunken);
+  border: 1px solid var(--sc-border);
+}
+
+.badge.unknown {
+  color: var(--sc-unknown);
+  border-color: var(--sc-unknown);
+}
+
+.badge.failed,
+.badge.aborted {
+  color: var(--sc-danger);
+  border-color: var(--sc-danger);
+}
+
+.badge.returned {
+  color: var(--sc-ok);
+  border-color: var(--sc-ok);
+}
+
+.goal {
+  font-size: var(--sc-fs-sm);
+  word-break: break-word;
+}
+
+.kv {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  gap: 0 var(--sc-space-2);
+  margin: 0;
+  font-size: var(--sc-fs-xs);
+  color: var(--sc-text-dim);
+}
+
+.kv dt {
+  color: var(--sc-text-faint);
+}
+
+.kv dd {
+  margin: 0;
+}
+
+.result,
+.block {
+  padding: var(--sc-space-1);
+  border-radius: var(--sc-radius-sm);
+  background: var(--sc-bg-sunken);
+  font-size: var(--sc-fs-xs);
+  color: var(--sc-text-dim);
+  max-height: 180px;
+  overflow: auto;
+}
+
+.actions {
+  display: flex;
+  gap: var(--sc-space-1);
+  flex-wrap: wrap;
+}
+
+.checkbox {
+  display: flex;
+  align-items: center;
+  gap: var(--sc-space-1);
+  font-size: var(--sc-fs-xs);
+  color: var(--sc-text-dim);
+}
+
+.form {
+  display: flex;
+  flex-direction: column;
+  font-size: 13px;
+  color: var(--sc-text);
+}
+
+/* 字段竖排（标签 → 控件 → 说明），行间一条发丝线：这是 DeepSeek Harness 设置页的排法，
+   比"每行左边标签右边输入框"更好读——长基址与密钥不会被 132px 标签挤窄。 */
+.form label,
+.formRow {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 12px 0;
+  border-top: 1px solid var(--sc-border);
+}
+
+.formRow:first-child,
+.form label:first-child {
+  border-top: 0;
+  padding-top: 2px;
+}
+
+.formLabel {
+  font-size: 13px;
+  font-weight: 500;
+  line-height: 1.5;
+  color: var(--sc-text);
+}
+
+.formHint {
+  margin: 0;
+  color: var(--sc-text-faint);
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+.form input,
+.form select {
+  width: 100%;
+  min-width: 0;
+  height: 34px;
+  padding: 0 12px;
+  border: 1px solid var(--sc-border);
+  border-radius: 8px;
+  background: var(--sc-bg-raised);
+  color: var(--sc-text);
+  font: inherit;
+  font-size: 13px;
+}
+
+.form input:focus-visible,
+.form select:focus-visible {
+  outline: none;
+  border-color: var(--sc-accent);
+}
+
+.formActions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  padding-top: 16px;
+}
+
+.primaryButton {
+  padding: 5px 14px;
+  border: 1px solid transparent;
+  border-radius: 8px;
+  background: var(--sc-text);
+  color: var(--sc-bg-raised);
+  font: inherit;
+  font-size: 13px;
+  line-height: 1.5;
+  cursor: pointer;
+}
+
+.primaryButton:disabled {
+  cursor: not-allowed;
+  opacity: 0.45;
+}
+
+.hint {
+  margin: 0;
+  color: var(--sc-text-faint);
+  font-size: var(--sc-fs-xs);
+  word-break: break-word;
+}
+
+.dim {
+  color: var(--sc-text-faint);
+  font-size: var(--sc-fs-xs);
+}
+
+.mono {
+  font-family: var(--sc-font-mono);
+}
+
+.ok {
+  color: var(--sc-ok);
+  font-size: var(--sc-fs-xs);
+}
+
+.warn {
+  color: var(--sc-warn);
+  font-size: var(--sc-fs-xs);
+}
+
+.receipts {
+  display: flex;
+  gap: 4px;
+  flex-wrap: wrap;
+}
+
+.receiptOn,
+.receiptOff {
+  padding: 0 var(--sc-space-1);
+  border-radius: var(--sc-radius-sm);
+  border: 1px solid var(--sc-border);
+  font-size: var(--sc-fs-xs);
+}
+
+.receiptOn {
+  color: var(--sc-ok);
+  border-color: var(--sc-ok);
+}
+
+.receiptOff {
+  color: var(--sc-text-faint);
+  opacity: 0.6;
+}
+
+/* 通知条目：整行可点 */
+.inboxRow {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.inboxItem {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex: 1 1 auto;
+  min-width: 0;
+  min-height: 38px;
+  padding: 6px 8px;
+  border: 0;
+  border-radius: 8px;
+  background: transparent;
+  text-align: left;
+}
+
+.inboxItem:hover { background: var(--sc-bg-sunken); }
+
+.inboxDismiss {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: 0 0 auto;
+  width: 24px;
+  height: 24px;
+  min-height: 0;
+  padding: 0;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--sc-text-faint);
+  cursor: pointer;
+  opacity: 0;
+  transition: opacity 120ms ease, background 120ms ease, color 120ms ease;
+}
+
+.inboxRow:hover .inboxDismiss,
+.inboxDismiss:focus-visible { opacity: 1; }
+
+.inboxDismiss:hover {
+  background: var(--sc-bg-sunken);
+  color: var(--sc-text);
+}
+
+.inboxTitle {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  color: var(--sc-text);
+  font-size: 13px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}

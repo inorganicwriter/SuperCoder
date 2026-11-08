@@ -1,0 +1,65 @@
+.card {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sc-space-2);
+  padding: var(--sc-space-3);
+  border: 1px solid var(--sc-warn);
+  border-radius: var(--sc-radius);
+  background: var(--sc-warn-soft);
+  flex-basis: 100%;
+}
+
+.cardTitle {
+  font-weight: 600;
+  color: var(--sc-warn);
+  font-size: var(--sc-fs-sm);
+}
+
+.cardBody {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--sc-space-1);
+  color: var(--sc-text-dim);
+  font-size: var(--sc-fs-sm);
+}
+
+.code {
+  font-family: var(--sc-font-mono);
+  background: var(--sc-bg-sunken);
+  padding: 0 var(--sc-space-1);
+  border-radius: var(--sc-radius-sm);
+  color: var(--sc-text);
+}
+
+.cardRow {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--sc-space-2);
+  flex-wrap: wrap;
+}
+
+.cardActions,
+.optionRow {
+  display: flex;
+  gap: var(--sc-space-2);
+  flex-wrap: wrap;
+}
+
+.checkbox {
+  display: flex;
+  align-items: center;
+  gap: var(--sc-space-2);
+  font-size: var(--sc-fs-xs);
+  color: var(--sc-text-dim);
+}
+
+.rememberSelect {
+  width: 160px;
+}
+
+.input {
+  flex: 1;
+  min-width: 120px;
+}

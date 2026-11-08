@@ -1,0 +1,60 @@
+{
+  "name": "supercoder",
+  "private": true,
+  "version": "0.1.0",
+  "license": "MIT",
+  "type": "module",
+  "description": "本机桌面应用：自己答还是派给外部编程 Agent，派活、盯进度、收结果，全程可回看、可回撤、可核实。",
+  "main": "lib-electron/main.cjs",
+  "engines": {
+    "node": ">=22"
+  },
+  "scripts": {
+    "typecheck": "tsc -b tsconfig.host.json --pretty false && tsc -p tsconfig.client.json --pretty false && tsc -p tsconfig.test.json --pretty false",
+    "lint": "oxlint src",
+    "boundaries": "depcruise src --config .dependency-cruiser.cjs",
+    "verify:boundaries": "node tools/verify-boundaries.mjs",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "check": "pnpm typecheck && pnpm lint && pnpm boundaries && pnpm i18n:gate && pnpm verify:boundaries",
+    "gen:schema": "tsc -p tsconfig.scripts.json --pretty false && node lib-scripts/tools/gen-schema.js",
+    "bench": "tsc -p tsconfig.bench.json --pretty false && node lib-scripts/bench/index.js",
+    "i18n:gate": "node tools/i18n-gate.mjs",
+    "build:host": "tsc -b tsconfig.host.json --pretty false",
+    "build:electron": "tsc -p tsconfig.electron.json --pretty false && node --check lib-electron/main.cjs && node --check lib-electron/preload.cjs",
+    "build:renderer": "vite build",
+    "build": "pnpm build:host && pnpm build:electron && pnpm build:renderer",
+    "start": "electron .",
+    "dist": "pnpm check && pnpm test && pnpm build && electron-builder --win nsis --publish never",
+    "dist:portable": "pnpm build && electron-builder --win portable --publish never",
+    "dist:zip": "pnpm build && electron-builder --win zip --publish never"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "1.32.2",
+    "electron-updater": "6.8.11",
+    "katex": "0.16.47",
+    "markdown-it": "14.3.3",
+    "pino": "10.4.0",
+    "react": "18.3.1",
+    "react-dom": "18.3.1",
+    "sql.js": "1.15.2",
+    "ws": "8.22.1",
+    "zod": "4.6.7"
+  },
+  "devDependencies": {
+    "@types/markdown-it": "14.2.0",
+    "@types/node": "26.6.6",
+    "@types/react": "18.3.12",
+    "@types/react-dom": "18.3.1",
+    "@types/sql.js": "1.4.11",
+    "@types/ws": "8.18.2",
+    "@vitejs/plugin-react": "6.2.1",
+    "dependency-cruiser": "18.7.2",
+    "electron": "45.2.1",
+    "electron-builder": "26.18.0",
+    "oxlint": "1.91.0",
+    "typescript": "6.0.3",
+    "vite": "8.3.5",
+    "vitest": "5.1.0"
+  }
+}

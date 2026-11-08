@@ -1,0 +1,714 @@
+{
+  "models": {
+    "Delivery": {
+      "additionalProperties": false,
+      "properties": {
+        "id": {
+          "title": "Id",
+          "type": "string"
+        },
+        "message_id": {
+          "title": "Message Id",
+          "type": "string"
+        },
+        "workspace_path": {
+          "title": "Workspace Path",
+          "type": "string"
+        },
+        "chat_id": {
+          "title": "Chat Id",
+          "type": "string"
+        },
+        "task_id": {
+          "title": "Task Id",
+          "type": "string"
+        },
+        "agent_id": {
+          "title": "Agent Id",
+          "type": "string"
+        },
+        "kind": {
+          "const": "instruction",
+          "default": "instruction",
+          "title": "Kind",
+          "type": "string"
+        },
+        "state": {
+          "enum": [
+            "queued",
+            "claimed",
+            "submitting",
+            "submitted",
+            "acknowledged",
+            "status_to_confirm",
+            "cancelled"
+          ],
+          "title": "State",
+          "type": "string"
+        },
+        "rev": {
+          "title": "Rev",
+          "type": "integer"
+        },
+        "execution_id": {
+          "default": "",
+          "title": "Execution Id",
+          "type": "string"
+        },
+        "session_id": {
+          "default": "",
+          "title": "Session Id",
+          "type": "string"
+        },
+        "attempts": {
+          "default": 0,
+          "title": "Attempts",
+          "type": "integer"
+        },
+        "receipt": {
+          "default": "",
+          "title": "Receipt",
+          "type": "string"
+        },
+        "error": {
+          "default": "",
+          "title": "Error",
+          "type": "string"
+        },
+        "created_at": {
+          "title": "Created At",
+          "type": "string"
+        },
+        "updated_at": {
+          "title": "Updated At",
+          "type": "string"
+        }
+      },
+      "required": [
+        "id",
+        "message_id",
+        "workspace_path",
+        "chat_id",
+        "task_id",
+        "agent_id",
+        "state",
+        "rev",
+        "created_at",
+        "updated_at"
+      ],
+      "title": "Delivery",
+      "type": "object"
+    },
+    "DecisionRequest": {
+      "$defs": {
+        "DecisionOption": {
+          "additionalProperties": false,
+          "properties": {
+            "key": {
+              "maxLength": 80,
+              "minLength": 1,
+              "pattern": "^[a-zA-Z0-9_-]+$",
+              "title": "Key",
+              "type": "string"
+            },
+            "label": {
+              "maxLength": 500,
+              "minLength": 1,
+              "title": "Label",
+              "type": "string"
+            }
+          },
+          "required": [
+            "key",
+            "label"
+          ],
+          "title": "DecisionOption",
+          "type": "object"
+        }
+      },
+      "additionalProperties": false,
+      "properties": {
+        "id": {
+          "title": "Id",
+          "type": "string"
+        },
+        "workspace_path": {
+          "title": "Workspace Path",
+          "type": "string"
+        },
+        "chat_id": {
+          "title": "Chat Id",
+          "type": "string"
+        },
+        "task_id": {
+          "default": "",
+          "title": "Task Id",
+          "type": "string"
+        },
+        "message_id": {
+          "default": "",
+          "title": "Message Id",
+          "type": "string"
+        },
+        "kind": {
+          "enum": [
+            "file_write",
+            "question",
+            "mcp",
+            "native_permission",
+            "native_question"
+          ],
+          "title": "Kind",
+          "type": "string"
+        },
+        "title": {
+          "title": "Title",
+          "type": "string"
+        },
+        "body": {
+          "title": "Body",
+          "type": "string"
+        },
+        "options": {
+          "items": {
+            "$ref": "#/$defs/DecisionOption"
+          },
+          "title": "Options",
+          "type": "array"
+        },
+        "free_text": {
+          "default": false,
+          "title": "Free Text",
+          "type": "boolean"
+        },
+        "state": {
+          "enum": [
+            "open",
+            "answering",
+            "answered",
+            "withdrawn",
+            "status_to_confirm"
+          ],
+          "title": "State",
+          "type": "string"
+        },
+        "rev": {
+          "title": "Rev",
+          "type": "integer"
+        },
+        "answer": {
+          "default": "",
+          "title": "Answer",
+          "type": "string"
+        },
+        "error": {
+          "default": "",
+          "title": "Error",
+          "type": "string"
+        },
+        "created_at": {
+          "title": "Created At",
+          "type": "string"
+        },
+        "updated_at": {
+          "title": "Updated At",
+          "type": "string"
+        }
+      },
+      "required": [
+        "id",
+        "workspace_path",
+        "chat_id",
+        "kind",
+        "title",
+        "body",
+        "state",
+        "rev",
+        "created_at",
+        "updated_at"
+      ],
+      "title": "DecisionRequest",
+      "type": "object"
+    },
+    "DecisionAnswer": {
+      "additionalProperties": false,
+      "properties": {
+        "if_rev": {
+          "minimum": 1,
+          "title": "If Rev",
+          "type": "integer"
+        },
+        "option": {
+          "default": "",
+          "maxLength": 80,
+          "title": "Option",
+          "type": "string"
+        },
+        "text": {
+          "default": "",
+          "maxLength": 16000,
+          "title": "Text",
+          "type": "string"
+        }
+      },
+      "required": [
+        "if_rev"
+      ],
+      "title": "DecisionAnswer",
+      "type": "object"
+    },
+    "DecisionAction": {
+      "additionalProperties": false,
+      "properties": {
+        "if_rev": {
+          "minimum": 1,
+          "title": "If Rev",
+          "type": "integer"
+        },
+        "action": {
+          "const": "dismiss",
+          "title": "Action",
+          "type": "string"
+        }
+      },
+      "required": [
+        "if_rev",
+        "action"
+      ],
+      "title": "DecisionAction",
+      "type": "object"
+    },
+    "DeliveryAction": {
+      "additionalProperties": false,
+      "properties": {
+        "if_rev": {
+          "minimum": 1,
+          "title": "If Rev",
+          "type": "integer"
+        },
+        "action": {
+          "enum": [
+            "retry",
+            "cancel"
+          ],
+          "title": "Action",
+          "type": "string"
+        }
+      },
+      "required": [
+        "if_rev",
+        "action"
+      ],
+      "title": "DeliveryAction",
+      "type": "object"
+    },
+    "Handover": {
+      "additionalProperties": false,
+      "properties": {
+        "actor_id": {
+          "title": "Actor Id",
+          "type": "string"
+        },
+        "task_id": {
+          "title": "Task Id",
+          "type": "string"
+        },
+        "rev": {
+          "title": "Rev",
+          "type": "integer"
+        },
+        "state": {
+          "title": "State",
+          "type": "string"
+        },
+        "summary": {
+          "title": "Summary",
+          "type": "string"
+        },
+        "next": {
+          "default": "",
+          "title": "Next",
+          "type": "string"
+        },
+        "waiting_on": {
+          "default": "",
+          "title": "Waiting On",
+          "type": "string"
+        },
+        "traps": {
+          "default": "",
+          "title": "Traps",
+          "type": "string"
+        },
+        "verify": {
+          "default": "",
+          "title": "Verify",
+          "type": "string"
+        },
+        "pointers": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Pointers",
+          "type": "array"
+        },
+        "session_id": {
+          "default": "",
+          "title": "Session Id",
+          "type": "string"
+        },
+        "updated_at": {
+          "title": "Updated At",
+          "type": "string"
+        }
+      },
+      "required": [
+        "actor_id",
+        "task_id",
+        "rev",
+        "state",
+        "summary",
+        "updated_at"
+      ],
+      "title": "Handover",
+      "type": "object"
+    },
+    "CollaborationSnapshot": {
+      "$defs": {
+        "DecisionOption": {
+          "additionalProperties": false,
+          "properties": {
+            "key": {
+              "maxLength": 80,
+              "minLength": 1,
+              "pattern": "^[a-zA-Z0-9_-]+$",
+              "title": "Key",
+              "type": "string"
+            },
+            "label": {
+              "maxLength": 500,
+              "minLength": 1,
+              "title": "Label",
+              "type": "string"
+            }
+          },
+          "required": [
+            "key",
+            "label"
+          ],
+          "title": "DecisionOption",
+          "type": "object"
+        },
+        "DecisionRequest": {
+          "additionalProperties": false,
+          "properties": {
+            "id": {
+              "title": "Id",
+              "type": "string"
+            },
+            "workspace_path": {
+              "title": "Workspace Path",
+              "type": "string"
+            },
+            "chat_id": {
+              "title": "Chat Id",
+              "type": "string"
+            },
+            "task_id": {
+              "default": "",
+              "title": "Task Id",
+              "type": "string"
+            },
+            "message_id": {
+              "default": "",
+              "title": "Message Id",
+              "type": "string"
+            },
+            "kind": {
+              "enum": [
+                "file_write",
+                "question",
+                "mcp",
+                "native_permission",
+                "native_question"
+              ],
+              "title": "Kind",
+              "type": "string"
+            },
+            "title": {
+              "title": "Title",
+              "type": "string"
+            },
+            "body": {
+              "title": "Body",
+              "type": "string"
+            },
+            "options": {
+              "items": {
+                "$ref": "#/$defs/DecisionOption"
+              },
+              "title": "Options",
+              "type": "array"
+            },
+            "free_text": {
+              "default": false,
+              "title": "Free Text",
+              "type": "boolean"
+            },
+            "state": {
+              "enum": [
+                "open",
+                "answering",
+                "answered",
+                "withdrawn",
+                "status_to_confirm"
+              ],
+              "title": "State",
+              "type": "string"
+            },
+            "rev": {
+              "title": "Rev",
+              "type": "integer"
+            },
+            "answer": {
+              "default": "",
+              "title": "Answer",
+              "type": "string"
+            },
+            "error": {
+              "default": "",
+              "title": "Error",
+              "type": "string"
+            },
+            "created_at": {
+              "title": "Created At",
+              "type": "string"
+            },
+            "updated_at": {
+              "title": "Updated At",
+              "type": "string"
+            }
+          },
+          "required": [
+            "id",
+            "workspace_path",
+            "chat_id",
+            "kind",
+            "title",
+            "body",
+            "state",
+            "rev",
+            "created_at",
+            "updated_at"
+          ],
+          "title": "DecisionRequest",
+          "type": "object"
+        },
+        "Delivery": {
+          "additionalProperties": false,
+          "properties": {
+            "id": {
+              "title": "Id",
+              "type": "string"
+            },
+            "message_id": {
+              "title": "Message Id",
+              "type": "string"
+            },
+            "workspace_path": {
+              "title": "Workspace Path",
+              "type": "string"
+            },
+            "chat_id": {
+              "title": "Chat Id",
+              "type": "string"
+            },
+            "task_id": {
+              "title": "Task Id",
+              "type": "string"
+            },
+            "agent_id": {
+              "title": "Agent Id",
+              "type": "string"
+            },
+            "kind": {
+              "const": "instruction",
+              "default": "instruction",
+              "title": "Kind",
+              "type": "string"
+            },
+            "state": {
+              "enum": [
+                "queued",
+                "claimed",
+                "submitting",
+                "submitted",
+                "acknowledged",
+                "status_to_confirm",
+                "cancelled"
+              ],
+              "title": "State",
+              "type": "string"
+            },
+            "rev": {
+              "title": "Rev",
+              "type": "integer"
+            },
+            "execution_id": {
+              "default": "",
+              "title": "Execution Id",
+              "type": "string"
+            },
+            "session_id": {
+              "default": "",
+              "title": "Session Id",
+              "type": "string"
+            },
+            "attempts": {
+              "default": 0,
+              "title": "Attempts",
+              "type": "integer"
+            },
+            "receipt": {
+              "default": "",
+              "title": "Receipt",
+              "type": "string"
+            },
+            "error": {
+              "default": "",
+              "title": "Error",
+              "type": "string"
+            },
+            "created_at": {
+              "title": "Created At",
+              "type": "string"
+            },
+            "updated_at": {
+              "title": "Updated At",
+              "type": "string"
+            }
+          },
+          "required": [
+            "id",
+            "message_id",
+            "workspace_path",
+            "chat_id",
+            "task_id",
+            "agent_id",
+            "state",
+            "rev",
+            "created_at",
+            "updated_at"
+          ],
+          "title": "Delivery",
+          "type": "object"
+        }
+      },
+      "additionalProperties": false,
+      "properties": {
+        "workspace_path": {
+          "title": "Workspace Path",
+          "type": "string"
+        },
+        "chat_id": {
+          "title": "Chat Id",
+          "type": "string"
+        },
+        "cursor": {
+          "title": "Cursor",
+          "type": "integer"
+        },
+        "message_deliveries": {
+          "items": {
+            "$ref": "#/$defs/Delivery"
+          },
+          "title": "Message Deliveries",
+          "type": "array"
+        },
+        "decision_requests": {
+          "items": {
+            "$ref": "#/$defs/DecisionRequest"
+          },
+          "title": "Decision Requests",
+          "type": "array"
+        }
+      },
+      "required": [
+        "workspace_path",
+        "chat_id",
+        "cursor",
+        "message_deliveries",
+        "decision_requests"
+      ],
+      "title": "CollaborationSnapshot",
+      "type": "object"
+    },
+    "AssistantStreamBaseline": {
+      "additionalProperties": false,
+      "properties": {
+        "id": {
+          "title": "Id",
+          "type": "string"
+        },
+        "workspace_path": {
+          "title": "Workspace Path",
+          "type": "string"
+        },
+        "chat_id": {
+          "title": "Chat Id",
+          "type": "string"
+        },
+        "origin_message_id": {
+          "title": "Origin Message Id",
+          "type": "string"
+        },
+        "text": {
+          "default": "",
+          "title": "Text",
+          "type": "string"
+        },
+        "next_index": {
+          "minimum": 0,
+          "title": "Next Index",
+          "type": "integer"
+        },
+        "rev": {
+          "minimum": 1,
+          "title": "Rev",
+          "type": "integer"
+        },
+        "status": {
+          "enum": [
+            "running",
+            "completed",
+            "interrupted",
+            "withdrawn"
+          ],
+          "title": "Status",
+          "type": "string"
+        },
+        "error": {
+          "default": "",
+          "title": "Error",
+          "type": "string"
+        },
+        "updated_at": {
+          "title": "Updated At",
+          "type": "string"
+        }
+      },
+      "required": [
+        "id",
+        "workspace_path",
+        "chat_id",
+        "origin_message_id",
+        "next_index",
+        "rev",
+        "status",
+        "updated_at"
+      ],
+      "title": "AssistantStreamBaseline",
+      "type": "object"
+    }
+  }
+}

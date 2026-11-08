@@ -1,0 +1,62 @@
+/* 统一下拉：触发按钮与输入框同高同边框；弹层与输入区的模型选择弹层同一套样式。 */
+.wrap { position: relative; display: block; min-width: 0; }
+
+.trigger {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  min-height: var(--sc-control-h);
+  padding: 0 10px 0 12px;
+  border: 1px solid var(--sc-border-strong);
+  border-radius: var(--sc-radius-sm);
+  background: var(--sc-bg-raised);
+  color: var(--sc-text);
+  font-size: var(--sc-fs-sm);
+  font-weight: 400;
+  text-align: left;
+}
+.trigger:hover:not(:disabled) { border-color: var(--sc-border-strong); background: var(--sc-bg-raised); }
+/* 禁用 = 固定值：灰底、不透明，读起来是"这里由别处决定"而不是"坏了"。 */
+.trigger:disabled { opacity: 1; background: var(--sc-bg-sunken); border-color: var(--sc-border); color: var(--sc-text-dim); cursor: default; }
+.trigger:disabled .caret { display: none; }
+.trigger[aria-expanded="true"] { border-color: var(--sc-accent-line); box-shadow: var(--sc-focus); }
+
+.value, .placeholder { flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.placeholder { color: var(--sc-text-faint); }
+.caret { flex: none; width: 6px; height: 6px; margin-bottom: 3px; border-right: 1.5px solid var(--sc-text-faint); border-bottom: 1.5px solid var(--sc-text-faint); transform: rotate(45deg); }
+
+.backdrop { position: fixed; inset: 0; z-index: 60; }
+.popover {
+  position: fixed;
+  z-index: 61;
+  padding: 6px;
+  border: 1px solid var(--sc-border);
+  border-radius: 12px;
+  background: var(--sc-bg-raised);
+  box-shadow: 0 16px 40px rgb(20 20 19 / 14%);
+}
+
+.filter { width: 100%; min-height: 32px; margin-bottom: 6px; background: var(--sc-bg); }
+.list { max-height: 280px; margin: 0; padding: 0; overflow-y: auto; list-style: none; }
+.group { padding: 8px 10px 4px; color: var(--sc-text-faint); font-size: 11.5px; }
+
+.option {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  min-height: 32px;
+  padding: 0 10px;
+  border: 0;
+  border-radius: 8px;
+  background: transparent;
+  color: var(--sc-text);
+  font-size: var(--sc-fs-sm);
+  text-align: left;
+}
+.option:hover:not(:disabled), .optionActive { border: 0; background: var(--sc-bg-sunken); }
+.optionLabel { flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.hint { flex: none; color: var(--sc-text-faint); font-size: 12px; }
+.check { flex: none; width: 9px; height: 5px; margin: 0 2px 3px; border-left: 1.5px solid var(--sc-text); border-bottom: 1.5px solid var(--sc-text); transform: rotate(-45deg); }
+.empty { padding: 8px 10px; color: var(--sc-text-faint); }

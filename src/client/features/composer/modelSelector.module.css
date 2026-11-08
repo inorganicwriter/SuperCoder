@@ -1,0 +1,228 @@
+/**
+ * 模型选择弹层样式：贴着输入区左下角浮起，与老界面的 popover 尺寸/层级一致。
+ */
+
+.wrap {
+  position: relative;
+  display: inline-flex;
+}
+
+.trigger {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  max-width: 260px;
+  padding: 5px 8px;
+  border: 0;
+  border-radius: 8px;
+  background: transparent;
+  color: var(--sc-text-dim);
+  font: inherit;
+  font-size: 12.5px;
+  cursor: pointer;
+}
+
+.trigger:hover {
+  background: var(--sc-bg-sunken);
+  color: var(--sc-text);
+}
+
+.triggerLabel {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.dot,
+.dotEmpty {
+  flex: 0 0 auto;
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+}
+
+.dot {
+  background: var(--sc-ok);
+}
+
+.dotEmpty {
+  background: var(--sc-unknown);
+}
+
+.caret {
+  color: var(--sc-text-faint);
+  font-size: 9px;
+}
+
+.backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 40;
+}
+
+.popover {
+  position: absolute;
+  z-index: 41;
+  bottom: calc(100% + 8px);
+  left: 0;
+  width: 340px;
+  padding: 8px;
+  border: 1px solid var(--sc-border);
+  border-radius: 14px;
+  background: var(--sc-bg-raised);
+  box-shadow: 0 16px 40px rgb(20 20 19 / 14%);
+}
+
+.head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 4px 8px 8px;
+  color: var(--sc-text-dim);
+  font-size: 12px;
+}
+
+.count {
+  color: var(--sc-text-faint);
+  font-variant-numeric: tabular-nums;
+}
+
+.list {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  max-height: 300px;
+  overflow-y: auto;
+}
+
+.item {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  border-radius: 10px;
+}
+
+.item:hover {
+  background: var(--sc-bg-sunken);
+}
+
+.itemMain {
+  flex: 1 1 auto;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 9px 10px;
+  border: 0;
+  background: transparent;
+  color: var(--sc-text);
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.itemTop {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+
+.name,
+.nameActive {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 13.5px;
+}
+
+.name {
+  color: var(--sc-text);
+}
+
+.nameActive {
+  color: var(--sc-accent-strong);
+  font-weight: 600;
+}
+
+.chip {
+  flex: 0 0 auto;
+  padding: 1px 6px;
+  border-radius: 5px;
+  background: var(--sc-bg-sunken);
+  color: var(--sc-text-dim);
+  font-size: 11px;
+}
+
+.keyLine {
+  color: var(--sc-text-faint);
+  font-size: 11.5px;
+}
+
+.inUse {
+  flex: 0 0 auto;
+  margin-right: 8px;
+  padding: 2px 8px;
+  border-radius: 999px;
+  background: var(--sc-accent-soft);
+  color: var(--sc-accent-strong);
+  font-size: 11.5px;
+}
+
+.remove {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: 0 0 auto;
+  width: 22px;
+  height: 22px;
+  min-height: 0;
+  padding: 0;
+  margin-right: 8px;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--sc-text-faint);
+  cursor: pointer;
+  opacity: 0;
+  transition: opacity 120ms ease, background 120ms ease, color 120ms ease;
+}
+
+.item:hover .remove,
+.remove:focus-visible {
+  opacity: 1;
+}
+
+.remove:hover {
+  background: var(--sc-bg-raised);
+  color: var(--sc-danger);
+}
+
+.empty {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 10px;
+  padding: 20px 12px;
+}
+
+.empty p {
+  margin: 0;
+  color: var(--sc-text-dim);
+  font-size: 13px;
+}
+
+.primary {
+  padding: 8px 14px;
+  border: 0;
+  border-radius: 10px;
+  background: var(--sc-accent);
+  color: var(--sc-on-accent);
+  font: inherit;
+  font-size: 13px;
+  cursor: pointer;
+}
+
+.primary:hover {
+  background: var(--sc-accent-strong);
+}

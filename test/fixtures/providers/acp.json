@@ -1,0 +1,71 @@
+{
+  "provider": "acp",
+  "level": 3,
+  "fixtures": [
+    {
+      "name": "ok-stream",
+      "transport": [
+        { "request": "initialize", "response": { "protocolVersion": 1 } },
+        { "request": "session/new", "response": { "sessionId": "sess_acp" } },
+        {
+          "request": "session/prompt",
+          "response": { "stopReason": "end_turn" },
+          "notifications": [
+            {
+              "method": "session/update",
+              "params": {
+                "sessionId": "sess_acp",
+                "update": {
+                  "sessionUpdate": "agent_message_chunk",
+                  "content": { "type": "text", "text": "第一段" }
+                }
+              }
+            },
+            {
+              "method": "session/update",
+              "params": {
+                "sessionId": "sess_acp",
+                "update": {
+                  "sessionUpdate": "agent_message_chunk",
+                  "content": { "type": "text", "text": "第二段" }
+                }
+              }
+            }
+          ]
+        }
+      ],
+      "expect": { "status": "ok", "answer": "第一段第二段", "sessionId": "sess_acp" }
+    },
+    {
+      "name": "refusal",
+      "transport": [
+        { "request": "initialize", "response": {} },
+        { "request": "session/new", "response": { "sessionId": "sess_refuse" } },
+        {
+          "request": "session/prompt",
+          "response": { "stopReason": "refusal" },
+          "notifications": []
+        }
+      ],
+      "expect": { "status": "failed", "category": "access-policy" }
+    },
+    {
+      "name": "no-chunks",
+      "transport": [
+        { "request": "initialize", "response": {} },
+        { "request": "session/new", "response": { "sessionId": "sess_empty" } },
+        { "request": "session/prompt", "response": { "stopReason": "end_turn" }, "notifications": [] }
+      ],
+      "expect": { "status": "failed", "category": "invalid-result" }
+    },
+    {
+      "name": "max-tokens",
+      "transport": [
+        { "request": "initialize", "response": {} },
+        { "request": "session/new", "response": { "sessionId": "sess_max" } },
+        { "request": "session/prompt", "response": { "stopReason": "max_tokens" }, "notifications": [] }
+      ],
+      "expect": { "status": "failed", "category": "limit" }
+    }
+  ]
+}

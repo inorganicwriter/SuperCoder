@@ -1,0 +1,28 @@
+# 行尾与二进制归属。
+#
+# 只写 `text=auto`，不写 `eol=lf`：开发机是 Windows 且 core.autocrlf=true，
+# 强制 eol=lf 会把工作区里的文件全部改写成 LF，产出一次无关的满仓改动。
+# 交给 autocrlf 决定即可——工作区 CRLF、仓库内 LF。
+#
+# 显式声明 `-text` 的目录：图片与图标是二进制，别让 git 去猜。
+# 之前 src/host/index.ts 被误判为二进制（索引里记成 -text），
+# 于是每次 diff 都是整文件重写（1066 行，实际改动只有 64 行）。
+# `text=auto` 让 .ts 明确走文本路径，不再被内容启发式判成二进制。
+* text=auto
+
+*.ts   text
+*.tsx  text
+*.cts  text
+*.mts  text
+*.js   text
+*.mjs  text
+*.cjs  text
+*.json text
+*.css  text
+*.md   text
+*.yml  text
+*.html text
+
+*.png  -text
+*.ico  -text
+*.wasm -text

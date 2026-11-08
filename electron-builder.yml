@@ -1,0 +1,71 @@
+# 打包配置：支持 NSIS 安装程序与 Portable 免安装单文件。
+#
+# 只打生产依赖：lib/（host）、lib-electron/（主进程与预加载）、dist/renderer/（界面）。
+# sql.js 的 wasm 必须解包到磁盘：它不能用 asar 里的虚拟路径加载。
+#
+# 两个 Windows 目标：
+# - nsis（安装版，产物 SuperCoder-<版本>-setup.exe）：带卸载器。注意 electron-builder 要
+#   编译一个中间安装器并**执行它**，由 NSIS 自己写出 uninstaller 再签名 —— 没有交互桌面
+#   会话的环境（服务、部分容器、无窗口站的 CI）会让这一步返回退出码 2，整个目标失败。
+# - portable（免安装单 exe，产物 SuperCoder-<版本>-portable.exe）：直接读 portable.nsi，
+#   跳过上述"生成并签名 uninstaller"的步骤，因此在无桌面会话里也能构建（已验证）。
+# zip 目标不写进 target 列表（它与 portable 内容重复、又多占一份体积），需要时用
+# `pnpm dist:zip` 单独产出，产物名由下面的 win.artifactName 决定。
+
+appId: com.supercoder.desktop
+productName: SuperCoder
+copyright: SuperCoder
+
+directories:
+  output: release
+  buildResources: build
+
+files:
+  - package.json
+  - lib/**/*
+  - lib-electron/**/*
+  # 界面：TypeScript/React 客户端（`pnpm build:renderer` 产出到 dist/renderer）。
+  - dist/renderer/**/*
+  - "!**/*.map"
+  - "!**/tsconfig*.json"
+
+asar: true
+asarUnpack:
+  - node_modules/sql.js/dist/**
+
+win:
+  target:
+    - target: nsis
+      arch:
+        - x64
+    - target: portable
+      arch:
+        - x64
+  # 图标源文件在 build/icon.ico（多尺寸 16–256）。build/ 其余内容不进仓库。
+  icon: build/icon.ico
+  # 默认产物命名规则。
+  artifactName: ${productName}-${version}-${arch}.${ext}
+  # 三个目标必须各自命名：共用 -setup 会让安装包、免安装单 exe、压缩包同名，
+  # 一眼分不清手里哪个是安装器，也容易被误当成可安装的东西双击。
+nsis:
+  artifactName: ${productName}-${version}-setup.${ext}
+  oneClick: false
+  perMachine: false
+  allowToChangeInstallationDirectory: true
+  createDesktopShortcut: true
+  createStartMenuShortcut: true
+  shortcutName: SuperCoder
+  deleteAppDataOnUninstall: false
+
+portable:
+  artifactName: ${productName}-${version}-portable.${ext}
+
+# 代码签名配置。证书不进仓库，靠下面两个环境变量喂给 electron-builder：
+#   CSC_LINK=file:///D:/certs/supercoder.pfx   CSC_KEY_PASSWORD=<口令>
+# 配好之后连 uninstaller 一起签；没配时只打一行 "no code signing certificate configured,
+# signing is skipped"，产物可用，但首次运行会遇到 SmartScreen 提示。
+# 若用 EV 证书（硬件令牌、无导出 pfx），改为按证书主体名选取，取消下面这行的注释：
+# win.certificateSubjectName: SuperCoder
+
+# 没有发布通道：更新检查在打包版里失败会被静默吞掉（见 electron/main.cts）。
+publish: null

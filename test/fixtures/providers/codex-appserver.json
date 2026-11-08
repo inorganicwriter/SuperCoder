@@ -1,0 +1,97 @@
+{
+  "provider": "codex",
+  "level": 1,
+  "fixtures": [
+    {
+      "name": "ok-final",
+      "transport": [
+        { "request": "initialize", "response": { "userAgent": "codex/0.0.1" } },
+        { "request": "thread/start", "response": { "threadId": "thr_ok" } },
+        {
+          "request": "turn/start",
+          "response": { "turnId": "turn_ok" },
+          "notifications": [
+            { "method": "turn/event", "params": { "phase": "commentary", "text": "先看一眼目录。" } },
+            { "method": "turn/event", "params": { "kind": "tool_call", "text": "" } },
+            { "method": "turn/event", "params": { "phase": "final_answer", "text": "答案是 42" } },
+            { "method": "turn/completed", "params": { "turnId": "turn_ok" } }
+          ]
+        }
+      ],
+      "expect": { "status": "ok", "answer": "答案是 42", "sessionId": "thr_ok" }
+    },
+    {
+      "name": "partial-only",
+      "transport": [
+        { "request": "initialize", "response": {} },
+        { "request": "thread/start", "response": { "threadId": "thr_partial" } },
+        {
+          "request": "turn/start",
+          "response": { "turnId": "turn_partial" },
+          "notifications": [
+            { "method": "turn/event", "params": { "phase": "partial_answer", "text": "草稿：可能是 A" } },
+            { "method": "turn/completed", "params": {} }
+          ]
+        }
+      ],
+      "expect": { "status": "ok", "answer": "草稿：可能是 A" }
+    },
+    {
+      "name": "partial-then-tool",
+      "transport": [
+        { "request": "initialize", "response": {} },
+        { "request": "thread/start", "response": { "threadId": "thr_tool" } },
+        {
+          "request": "turn/start",
+          "response": { "turnId": "turn_tool" },
+          "notifications": [
+            { "method": "turn/event", "params": { "phase": "partial_answer", "text": "我猜是 A" } },
+            { "method": "turn/event", "params": { "kind": "tool_call", "text": "" } },
+            { "method": "turn/event", "params": { "kind": "tool_result", "text": "" } },
+            { "method": "turn/completed", "params": {} }
+          ]
+        }
+      ],
+      "expect": { "status": "failed", "category": "invalid-result" }
+    },
+    {
+      "name": "unknown-phase",
+      "transport": [
+        { "request": "initialize", "response": {} },
+        { "request": "thread/start", "response": { "threadId": "thr_odd" } },
+        {
+          "request": "turn/start",
+          "response": { "turnId": "turn_odd" },
+          "notifications": [
+            { "method": "turn/event", "params": { "phase": "thinking", "text": "嗯……" } },
+            { "method": "turn/completed", "params": {} }
+          ]
+        }
+      ],
+      "expect": { "status": "failed", "category": "invalid-result" }
+    },
+    {
+      "name": "error-limit",
+      "transport": [
+        { "request": "initialize", "response": {} },
+        { "request": "thread/start", "response": { "threadId": "thr_limit" } },
+        {
+          "request": "turn/start",
+          "response": { "turnId": "turn_limit" },
+          "notifications": [
+            { "method": "error", "params": { "message": "rate limit exceeded, retry later" } }
+          ]
+        }
+      ],
+      "expect": { "status": "failed", "category": "limit" }
+    },
+    {
+      "name": "no-thread-id",
+      "transport": [
+        { "request": "initialize", "response": {} },
+        { "request": "thread/start", "response": {} }
+      ],
+      "expect": { "status": "failed", "category": "protocol", "stage": "handshake" }
+    }
+  ]
+}

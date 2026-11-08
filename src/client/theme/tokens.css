@@ -1,0 +1,113 @@
+/**
+ * 设计令牌定义：集中管理系统颜色、间距与字号规范。
+ *
+ * 调色板是类 Claude 的米色系统（沿用自早期 Python 版前端）：
+ * 画布 #FAF9F5、侧栏 #F0EEE6、卡片 #FFFFFF、描边 #E5E2D8、强调 #D97757、
+ * 界面文字使用统一字体。为清晰起见保留两点差异，原因见下方注释：
+ * 弱化文字与"当文字用的强调色"都比原版深一档，保证 4.5:1。
+ */
+
+:root {
+  --sc-bg: #faf9f5;
+  --sc-bg-raised: #ffffff;
+  --sc-bg-sunken: #f0eee6;
+  --sc-border: #e5e2d8;
+  --sc-border-strong: #d5d2c6;
+  --sc-text: #141413;
+  --sc-text-dim: #63615b;
+  /* 原版 --text-muted 是 #8E8C84，压在米底上只有 3.2:1；这里深一档到 5.1:1。 */
+  --sc-text-faint: #6f6a61;
+
+  /* 强调色只做填充/描边用；当文字用时取 strong —— 原版 #D97757 作正文只有 2.96:1。 */
+  --sc-accent: #d97757;
+  --sc-accent-strong: #b0522f;
+  --sc-accent-soft: rgb(217 119 87 / 12%);
+  --sc-accent-line: rgb(217 119 87 / 34%);
+  --sc-on-accent: #fffaf3;
+
+  --sc-ok: #087a56;
+  --sc-ok-soft: rgb(16 185 129 / 8%);
+  --sc-warn: #b45309;
+  --sc-warn-soft: rgb(217 119 87 / 10%);
+  --sc-danger: #e5484d;
+  --sc-danger-soft: rgb(229 72 77 / 8%);
+  --sc-unknown: #7a5cae;
+  --sc-unknown-soft: rgb(122 92 174 / 12%);
+
+  --sc-space-1: 4px;
+  --sc-space-2: 8px;
+  --sc-space-3: 12px;
+  --sc-space-4: 16px;
+  --sc-space-5: 24px;
+  --sc-space-6: 32px;
+
+  /* 原版：控件圆角 12px、弹层 16px。 */
+  --sc-radius: 12px;
+  --sc-radius-sm: 8px;
+  --sc-radius-lg: 16px;
+  --sc-control-h: 34px;
+  --sc-focus: 0 0 0 3px var(--sc-accent-soft);
+
+  /* 拉丁字形在前、中文字形在后：英文使用 Segoe UI（与界面其它地方一致），
+     中文落到苹方 / 雅黑。若把雅黑排在最前，英文也会被它接管。 */
+  --sc-font:
+    "Inter", "Segoe UI Variable Text", "Segoe UI", system-ui, -apple-system, "Helvetica Neue", Arial,
+    "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", "Noto Sans SC", sans-serif;
+  /* 标题用衬线：Claude 的页面就是"无衬线正文 + 衬线标题"，层级靠字形而不是靠加粗。 */
+  --sc-font-display:
+    "Tiempos Headline", "Source Serif 4", "Source Serif Pro", Georgia, "Noto Serif SC", "Songti SC",
+    "STSong", serif;
+  /* 回复正文：拉丁字形用与标题同族的衬线（Claude 网页端的回复就是这样排的），
+     中文不进衬线，直接落到与界面相同的黑体，所以中文观感不变。 */
+  --sc-font-reading:
+    "Tiempos Text", "Source Serif 4", "Source Serif Pro", Georgia, "Times New Roman",
+    "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", "Noto Sans SC", serif;
+  --sc-font-mono: "JetBrains Mono", "SF Mono", "Cascadia Code", Consolas, Menlo, monospace;
+  --sc-fs-xs: 12px;
+  --sc-fs-sm: 13px;
+  --sc-fs-md: 14px;
+  --sc-fs-lg: 15px;
+  --sc-fs-xl: 19px;
+
+  --sc-shadow: 0 6px 28px -6px rgb(20 20 19 / 8%);
+
+  /* 用户消息气泡：原版用 --bg-user-bubble #F0EEE6，比卡片深一档但不带色偏。 */
+  --sc-bubble-user: #f0eee6;
+
+  --sc-sidebar: 248px;
+  --sc-panel: 320px;
+}
+
+/* 深色：取值对齐 Python 版前端的 html.dark 变量。 */
+html.dark {
+  --sc-bg: #191918;
+  --sc-bg-raised: #22211f;
+  --sc-bg-sunken: #141413;
+  --sc-border: #2e2d29;
+  --sc-border-strong: #3e3c37;
+  --sc-text: #f2f0ea;
+  --sc-text-dim: #a09e96;
+  --sc-text-faint: #8b897f;
+
+  --sc-accent: #d97757;
+  --sc-accent-strong: #e38668;
+  --sc-accent-soft: rgb(217 119 87 / 18%);
+  --sc-accent-line: rgb(217 119 87 / 40%);
+  --sc-on-accent: #191918;
+
+  --sc-ok: #34d399;
+  --sc-ok-soft: rgb(52 211 153 / 12%);
+  --sc-warn: #f0b072;
+  --sc-warn-soft: rgb(217 119 87 / 16%);
+  --sc-danger: #ff7b72;
+  --sc-danger-soft: rgb(255 123 114 / 12%);
+  --sc-unknown: #b39ddb;
+  --sc-unknown-soft: rgb(179 157 219 / 16%);
+
+  --sc-shadow: 0 16px 40px -8px rgb(0 0 0 / 45%);
+}
+
+/* 深色下用户气泡用略亮的层，而不是浅色里的深一档。 */
+html.dark {
+  --sc-bubble-user: #292825;
+}

@@ -1,0 +1,79 @@
+/**
+ * 搜索弹窗样式：与老界面的 `#searchModal` 一致 —— 顶部对齐的输入框 + 结果列表。
+ */
+
+.box {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.input {
+  width: 100%;
+  padding: 10px 14px;
+  border: 1px solid var(--sc-border-strong);
+  min-height: 44px;
+  border-radius: 12px;
+  background: var(--sc-bg-raised);
+  color: var(--sc-text);
+  font: inherit;
+  font-size: 14.5px;
+}
+
+.input:focus {
+  outline: none;
+  border-color: var(--sc-accent-line);
+  box-shadow: var(--sc-focus);
+}
+
+.hint {
+  margin: 0;
+  padding: 4px 2px;
+  color: var(--sc-text-faint);
+  font-size: 12.5px;
+}
+
+.list {
+  margin: 0;
+  padding: 0;
+  max-height: 320px;
+  overflow-y: auto;
+  list-style: none;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.hit {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 10px;
+  width: 100%;
+  padding: 8px 10px;
+  border: 0;
+  border-radius: 10px;
+  background: transparent;
+  color: var(--sc-text);
+  font: inherit;
+  font-size: 13px;
+  text-align: left;
+  cursor: pointer;
+}
+
+.hit:hover {
+  background: var(--sc-bg-sunken);
+}
+
+.hitTitle {
+  flex: 1 1 auto;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.hitDetail {
+  flex: 0 0 auto;
+  color: var(--sc-text-faint);
+  font-size: 12px;
+}

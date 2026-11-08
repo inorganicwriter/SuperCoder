@@ -1,0 +1,59 @@
+# 运行时数据（每个用户的 home，不进仓库）
+data/
+.test-tmp/
+.tmp/
+.supercoder/
+supercoder-tests-*/
+*.sqlite3
+*.sqlite3-journal
+*.db
+*.log
+
+# 构建产物
+build/*
+# 图标是源文件不是产物：build/ 整个忽略，只放行这一个。
+!build/icon.ico
+build-*/
+dist/
+dist-*/
+lib/
+lib-electron/
+lib-scripts/
+release/
+*.tsbuildinfo
+.vite/
+coverage/
+tools/schemas/*.tmp
+bench-output.txt
+test-10x.txt
+bench-progress.txt
+
+# Node
+node_modules/
+
+# 边界验证脚本注入的临时违规文件
+src/**/__violation_*.ts
+
+# 第三方参考源码（仅供阅读）
+deepseek-harness-master/
+
+# 本地资产与压缩包
+SuperCoder_PNG_sizes.zip
+
+# 本地环境（MCP 工具链仍可能需要 Python venv）
+.venv*/
+venv/
+
+# 系统与编辑器垃圾：仓库里只有 TypeScript，这些一律不该进版本库
+desktop.ini
+Desktop.ini
+Thumbs.db
+.DS_Store
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+.env
+.env.*
+!.env.example

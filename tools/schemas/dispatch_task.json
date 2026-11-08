@@ -1,0 +1,42 @@
+{
+  "name": "dispatch_task",
+  "description": "Delegate the user's request verbatim to an external executor. Single attempt: it settles when it returns.",
+  "mutating": true,
+  "parameters": {
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "type": "object",
+    "properties": {
+      "agent_id": {
+        "type": "string"
+      },
+      "instruction": {
+        "type": "string"
+      },
+      "task_type": {
+        "type": "string",
+        "enum": [
+          "general",
+          "plan",
+          "implement",
+          "review",
+          "fix"
+        ]
+      },
+      "allow_write": {
+        "type": "boolean"
+      },
+      "session_id": {
+        "type": "string"
+      },
+      "parent_task_id": {
+        "type": "string"
+      }
+    },
+    "required": [
+      "agent_id",
+      "instruction",
+      "task_type",
+      "allow_write"
+    ]
+  }
+}

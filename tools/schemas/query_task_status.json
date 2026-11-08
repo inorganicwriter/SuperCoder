@@ -1,0 +1,17 @@
+{
+  "name": "query_task_status",
+  "description": "Read the current state of a delegated task. Pure in-memory read, zero side effects.",
+  "mutating": false,
+  "parameters": {
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "type": "object",
+    "properties": {
+      "task_id": {
+        "type": "string"
+      }
+    },
+    "required": [
+      "task_id"
+    ]
+  }
+}

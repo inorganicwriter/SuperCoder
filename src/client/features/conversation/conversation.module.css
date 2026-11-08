@@ -1,0 +1,425 @@
+/**
+ * 对话区样式：照 Python 版 chat-turns.js 的排版重画。
+ *
+ * 用户消息是右对齐的暖灰气泡（radius 22 + --sc-bubble-user），
+ * 助手消息不加气泡、只留一个 "SuperCoder" 小标，正文按行距铺开。
+ * 操作（编辑 / 回撤到此处）在消息下方右侧，12px 次要色。
+ */
+
+.scroller {
+  flex: 1 1 auto;
+  width: 100%;
+  max-width: 760px;
+  margin: 0 auto;
+  padding: 24px 24px 8px;
+  display: flex;
+  flex-direction: column;
+  gap: 26px;
+  overflow-y: auto;
+  user-select: text;
+}
+
+.truncated {
+  align-self: center;
+  padding: 4px 10px;
+  border: 1px solid var(--sc-border);
+  border-radius: 999px;
+  color: var(--sc-text-faint);
+  font-size: 12px;
+}
+
+.userRow {
+  display: flex;
+  justify-content: flex-end;
+}
+
+.userBody {
+  max-width: 85%;
+  display: flex;
+  flex-direction: column;
+  /* 靠右、按内容取宽：用 stretch 时，短消息的气泡会被下方的操作栏撑到同样宽。 */
+  align-items: flex-end;
+  gap: 6px;
+}
+
+.userBubble {
+  max-width: 100%;
+  padding: 14px 20px;
+  border-radius: 22px;
+  background: var(--sc-bubble-user);
+  color: var(--sc-text);
+  font-size: 15px;
+  line-height: 1.68;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 12px;
+  font-size: 12px;
+  color: var(--sc-text-dim);
+}
+
+/* 正文下的行内操作：全局按钮的 min-height 会把这一行撑高，这里归零。 */
+.actionButton {
+  padding: 0;
+  min-height: 0;
+  border: 0;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  font-size: 12px;
+  line-height: 1.4;
+  cursor: pointer;
+}
+
+.actionButton:hover {
+  text-decoration: underline;
+}
+
+.assistant {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.assistantName {
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--sc-text);
+}
+
+.assistantBody {
+  color: var(--sc-text);
+  font-family: var(--sc-font-reading);
+  /* Georgia 默认是高低错落的老式数字，版本号、路径里的数字会显得乱。 */
+  font-variant-numeric: lining-nums;
+  font-size: 15px;
+  line-height: 1.68;
+  overflow-wrap: anywhere;
+}
+
+.editBox {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  width: min(560px, 100%);
+}
+
+.editInput {
+  width: 100%;
+  min-height: 96px;
+  padding: 10px 14px;
+  border: 1px solid var(--sc-border-strong);
+  border-radius: 12px;
+  background: var(--sc-bg);
+  color: var(--sc-text);
+  font: inherit;
+  font-size: 15px;
+  line-height: 1.6;
+  resize: vertical;
+}
+
+.editInput:focus {
+  outline: none;
+  border-color: var(--sc-accent);
+}
+
+.editHint {
+  margin: 0;
+  color: var(--sc-text-dim);
+  font-size: 12px;
+}
+
+.editActions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+}
+
+.buttonSecondary,
+.buttonPrimary {
+  padding: 6px 12px;
+  border-radius: 10px;
+  font: inherit;
+  font-size: 12.5px;
+  cursor: pointer;
+}
+
+.buttonSecondary {
+  border: 1px solid var(--sc-border-strong);
+  background: transparent;
+  color: var(--sc-text);
+}
+
+.buttonPrimary {
+  border: 1px solid var(--sc-accent);
+  background: var(--sc-accent);
+  color: #fff;
+}
+
+.buttonPrimary:disabled {
+  opacity: 0.55;
+  cursor: default;
+}
+
+.toolRow {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 12px;
+  border: 1px solid var(--sc-border);
+  border-radius: 12px;
+  background: var(--sc-bg-sunken);
+  font-size: 12.5px;
+}
+
+.toolName {
+  color: var(--sc-text);
+  font-weight: 500;
+}
+
+.toolState {
+  color: var(--sc-text-dim);
+}
+
+.ok {
+  color: var(--sc-ok, #3f7d4e);
+}
+
+.error {
+  color: var(--sc-danger);
+}
+
+.uncertain {
+  color: var(--sc-warn);
+}
+
+.pending,
+.running,
+.awaitingApproval {
+  color: var(--sc-text-dim);
+}
+
+.toolDetail {
+  flex: 1 1 100%;
+  margin: 0;
+  padding: 8px 10px;
+  border-radius: 8px;
+  background: var(--sc-bg);
+  color: var(--sc-text-dim);
+  font-family: var(--sc-font-mono, ui-monospace, SFMono-Regular, Menlo, monospace);
+  font-size: 12px;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.questionDone {
+  padding: 8px 12px;
+  border: 1px dashed var(--sc-border-strong);
+  border-radius: 12px;
+  color: var(--sc-text-dim);
+  font-size: 12.5px;
+}
+
+.placeholder {
+  margin: auto;
+  padding: 24px;
+  color: var(--sc-text-faint);
+  font-size: 13.5px;
+}
+
+.streamingLabel {
+  color: var(--sc-text-faint);
+  font-size: 12px;
+}
+
+.cursor {
+  display: inline-block;
+  width: 6px;
+  height: 15px;
+  margin-left: 2px;
+  vertical-align: -2px;
+  background: var(--sc-accent);
+  animation: blink 1s steps(2, start) infinite;
+}
+
+@keyframes blink {
+  to {
+    visibility: hidden;
+  }
+}
+
+/* —— 任务分派卡片：外部 Agent 的实时输出 —— */
+.taskCard {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin: 4px 0;
+  padding: 12px 14px;
+  border: 1px solid var(--sc-border);
+  border-radius: var(--sc-radius);
+  background: var(--sc-bg-raised);
+}
+
+.taskHead {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  cursor: pointer;
+  list-style: none;
+}
+
+.taskHead::-webkit-details-marker { display: none; }
+
+.taskPreview {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  color: var(--sc-text-faint);
+  font-size: 12.5px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.taskChevron {
+  flex: none;
+  width: 6px;
+  height: 6px;
+  margin: 0 2px 3px 4px;
+  border-right: 1.5px solid var(--sc-text-faint);
+  border-bottom: 1.5px solid var(--sc-text-faint);
+  transform: rotate(45deg);
+  transition: transform 150ms;
+}
+
+.taskCard[open] .taskChevron { margin-bottom: -3px; transform: rotate(-135deg); }
+
+.taskBody {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-top: 8px;
+}
+
+.taskAgent {
+  color: var(--sc-text);
+  font-size: 13px;
+  font-weight: 500;
+}
+
+.taskState {
+  flex: none;
+  margin-left: auto;
+  color: var(--sc-text-faint);
+  font-size: 12px;
+}
+
+.task_returned { color: var(--sc-ok); }
+.task_failed, .task_aborted { color: var(--sc-danger); }
+.task_unknown { color: var(--sc-unknown); }
+
+.pulse {
+  flex: none;
+  width: 7px;
+  height: 7px;
+  border-radius: 999px;
+  background: var(--sc-accent);
+  animation: taskPulse 1.2s ease-in-out infinite;
+}
+
+@keyframes taskPulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.3; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .pulse { animation: none; }
+}
+
+.taskGoal {
+  margin: 0;
+  color: var(--sc-text-dim);
+  font-size: 12.5px;
+  line-height: 1.55;
+  overflow: hidden;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+}
+
+.taskOutput {
+  max-height: 320px;
+  margin: 0;
+  padding: 10px 12px;
+  overflow-y: auto;
+  border-radius: var(--sc-radius-sm);
+  background: var(--sc-bg);
+  color: var(--sc-text);
+  font-size: 13px;
+}
+
+.taskWaiting {
+  margin: 0;
+  color: var(--sc-text-faint);
+  font-size: 12.5px;
+}
+
+.taskFailure {
+  margin: 0;
+  color: var(--sc-danger);
+  font-size: 12.5px;
+}
+
+/* —— 工具调用：连续的合并成一行，展开看明细 —— */
+.toolGroup {
+  margin: 2px 0;
+  color: var(--sc-text-dim);
+  font-size: 12.5px;
+}
+
+.toolSummary {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 3px 8px;
+  border-radius: 6px;
+  cursor: pointer;
+  list-style: none;
+}
+
+.toolSummary::-webkit-details-marker { display: none; }
+.toolSummary:hover { background: var(--sc-bg-sunken); color: var(--sc-text); }
+.toolSummaryText { font-family: var(--sc-font-mono); font-size: 12px; }
+
+.toolList {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin: 6px 0 0 8px;
+  padding: 0 0 0 10px;
+  border-left: 2px solid var(--sc-border);
+}
+
+.toolItem {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+}
+
+.toolItem .toolDetail { flex-basis: 100%; }
+
+/* 流式生成中的正文与光标同一行收尾 */
+.streamingBody { display: flex; flex-direction: column; }
+
+/* 等你处理的审批与提问：固定在对话末尾 */
+.pendingDock {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}

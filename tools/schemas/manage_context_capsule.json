@@ -1,0 +1,49 @@
+{
+  "name": "manage_context_capsule",
+  "description": "Create, update, promote or list a context capsule (handoff summary with touched files).",
+  "mutating": true,
+  "parameters": {
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "type": "object",
+    "properties": {
+      "action": {
+        "type": "string",
+        "enum": [
+          "create",
+          "update",
+          "promote",
+          "list"
+        ]
+      },
+      "capsule_id": {
+        "type": "string"
+      },
+      "title": {
+        "type": "string"
+      },
+      "human_summary": {
+        "type": "string"
+      },
+      "technical_handoff": {
+        "type": "string"
+      },
+      "touched_files": {
+        "type": "array",
+        "items": {
+          "type": "string"
+        }
+      },
+      "scope": {
+        "type": "string",
+        "enum": [
+          "chat",
+          "workspace"
+        ]
+      }
+    },
+    "required": [
+      "action",
+      "scope"
+    ]
+  }
+}
