@@ -12,6 +12,7 @@ import { ApprovalBroker } from "../../src/host/tools/approval.js";
 import { ToolRegistry } from "../../src/host/tools/registry.js";
 import { ToolPipeline } from "../../src/host/tools/pipeline.js";
 import { latestNativeSession, registerBuiltinTools } from "../../src/host/tools/builtin/index.js";
+import { buildTurnContext, MAX_TOOL_TEXT } from "../../src/host/agent/context.js";
 import { QuestionBroker } from "../../src/host/agent/questions.js";
 import { DelegationRunner } from "../../src/host/delegation/run.js";
 import { ProviderSelect } from "../../src/host/delegation/provider-select.js";
@@ -481,5 +482,66 @@ describe("Builtin Tools Collection", () => {
     } finally {
       fixture.cleanup();
     }
+  });
+
+  it("query_task_status omits duplicate streaming output when task succeeded", async () => {
+    const fixture = setup("最终结论");
+    try {
+      fixture.session.append("delegation/spawn", {
+        childId: "t-dedup",
+        provider: "codex",
+        agentId: "codex",
+        goal: "g",
+        instruction: "i",
+        mode: "read-only",
+      });
+      fixture.session.append("delegation/progress", {
+        childId: "t-dedup",
+        event: { type: "output", text: "流式中间内容".repeat(20) },
+      });
+      fixture.session.append("delegation/result", {
+        childId: "t-dedup",
+        result: { status: "ok", answer: "最终结论", durationMs: 10 },
+      });
+      const queried = await fixture.call("query_task_status", { task_id: "t-dedup" });
+      expect(queried.status).toBe("ok");
+      if (queried.status === "ok") {
+        const value = queried.value as { output?: string; result?: { answer?: string } };
+        expect(value.result?.answer).toBe("最终结论");
+        expect(value.output).toBeUndefined();
+      }
+    } finally {
+      fixture.cleanup();
+    }
+  });
+
+  it("context renderOutcome preserves head and tail without prompting to re-query", () => {
+    const headMarker = "HEAD_MARKER_START";
+    const tailMarker = "TAIL_MARKER_END";
+    const bigAnswer = `${headMarker}${"中".repeat(MAX_TOOL_TEXT + 5000)}${tailMarker}`;
+    const events: SessionEvent[] = [
+      {
+        type: "tool/call",
+        seq: 1,
+        at: "2026-01-01T00:00:00.000Z",
+        callId: "c1",
+        name: "dispatch_task",
+        args: {},
+      },
+      {
+        type: "tool/result",
+        seq: 2,
+        at: "2026-01-01T00:00:01.000Z",
+        callId: "c1",
+        outcome: { status: "ok", value: { answer: bigAnswer } },
+      },
+    ];
+    const messages = buildTurnContext({ events, system: "sys", rewind: null });
+    const toolMsg = messages.find((m) => m.role === "tool");
+    expect(toolMsg).toBeDefined();
+    expect(toolMsg?.content).toContain(headMarker);
+    expect(toolMsg?.content).toContain(tailMarker);
+    expect(toolMsg?.content).toContain("不要重复查询同一任务");
+    expect(toolMsg?.content).not.toContain("再查一次");
   });
 });

@@ -408,3 +408,44 @@ describe("Write Failure Injection", () => {
     }
   }, 60_000);
 });
+
+describe("SessionStore LRU Eviction", () => {
+  it("evicts oldest idle unsubscribed handles while preserving busy and subscribed handles", () => {
+    const temp = makeTempHome();
+    const evicted: string[] = [];
+    const store = new SessionStore({
+      paths: temp.paths,
+      logger,
+      maxOpen: 2,
+      onEvict: (id) => evicted.push(id),
+    });
+    try {
+      const s1 = store.create("ws1", "一").sessionId;
+      const s2 = store.create("ws1", "二").sessionId;
+      const s3 = store.create("ws1", "三").sessionId;
+      // s1 空闲且无订阅者，打开 s3 时被淘汰。
+      expect(evicted).toEqual([s1]);
+      expect(store.maybe(s1)).toBeNull();
+      expect(store.maybe(s2)).not.toBeNull();
+      expect(store.maybe(s3)).not.toBeNull();
+
+      // 给 s2 挂上订阅者、让 s3 进入回合中，打开 s4 时都不会被淘汰（容量暂时允许超过 maxOpen）。
+      const unsub = store.get(s2).subscribe(() => {});
+      store.get(s3).beginTurn("turn-busy");
+      const s4 = store.create("ws1", "四").sessionId;
+      expect(store.maybe(s2)).not.toBeNull();
+      expect(store.maybe(s3)).not.toBeNull();
+      expect(store.maybe(s4)).not.toBeNull();
+
+      // 退订 s2 并重开 s1，最老的空闲无订阅者句柄（s2）应被回收。
+      unsub();
+      store.get(s1);
+      expect(evicted).toContain(s2);
+      expect(store.maybe(s2)).toBeNull();
+      store.get(s3).endTurn();
+    } finally {
+      store.closeAll();
+      temp.cleanup();
+    }
+  });
+});

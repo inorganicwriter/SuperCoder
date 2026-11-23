@@ -12,6 +12,7 @@
  */
 
 import { randomUUID } from "node:crypto";
+import { dirname, join } from "node:path";
 import type {
   DelegationEvent,
   DelegationResult,
@@ -19,9 +20,11 @@ import type {
   AgentModelConfig,
 } from "../../shared/domain/delegation.js";
 import type { TaskMode, TaskType, TaskView } from "../../shared/domain/task.js";
+import { ensureDir, writeJsonAtomic } from "../boot/atomic.js";
 import type { Logger } from "../boot/logger.js";
 import { fail, isRpcFailure, messageOf } from "../boot/failure.js";
 import type { SessionHandle } from "../session/handle.js";
+import { createGitBaseline } from "../workspace/git.js";
 import { snapshotWorkspace } from "../workspace/snapshot.js";
 import type { WorkspaceLocks } from "../workspace/locks.js";
 import type { ProviderSelect } from "./provider-select.js";
@@ -48,6 +51,8 @@ export interface DispatchInput {
   readonly modelConfig?: AgentModelConfig;
   readonly resumeSessionId?: string;
   readonly parentTaskId?: string;
+  /** 外部 Agent 产出输出或进展事件时触发，用于重置外层空闲超时计时器。 */
+  readonly onActivity?: () => void;
   readonly signal: AbortSignal;
 }
 
@@ -147,6 +152,7 @@ export class DelegationRunner {
       if (!acquired.ok) fail("busy", acquired.error);
       try {
         this.takeSnapshot(input, childId);
+        await this.saveGitBaseline(input, childId);
       } catch (error) {
         locks.release(input.workspaceId, childId);
         // 快照自己给过下一步（例如超过文件数上限）就原样抛，别拼第二个"下一步"。
@@ -198,12 +204,20 @@ export class DelegationRunner {
       if (pendingOutput === "") return;
       const text = pendingOutput;
       pendingOutput = "";
-      input.session.append("delegation/progress", { childId, event: { type: "output", text } });
+      try {
+        input.session.append("delegation/progress", { childId, event: { type: "output", text } });
+      } catch (error) {
+        logger.warn({ childId, error: messageOf(error) }, "刷写任务流式输出失败");
+      }
     };
     const record = (event: DelegationEvent): void => {
+      input.onActivity?.();
       if (event.type === "output") {
         pendingOutput += event.text;
-        if (flushTimer === null) flushTimer = setTimeout(flushOutput, OUTPUT_FLUSH_MS);
+        if (flushTimer === null) {
+          flushTimer = setTimeout(flushOutput, OUTPUT_FLUSH_MS);
+          flushTimer.unref();
+        }
         return;
       }
       // 其它事件要先落地，顺序不能乱。
@@ -290,6 +304,18 @@ export class DelegationRunner {
         size: file.size,
       })),
     });
+  }
+
+  private async saveGitBaseline(input: DispatchInput, childId: string): Promise<void> {
+    try {
+      const gitRef = await createGitBaseline(input.workspacePath);
+      if (gitRef === null) return;
+      const dir = join(dirname(input.session.logPath), "baselines");
+      ensureDir(dir);
+      writeJsonAtomic(join(dir, `${childId}.json`), { taskId: childId, gitRef });
+    } catch (error) {
+      this.deps.logger.warn({ childId, error: messageOf(error) }, "记录 Git 基线失败");
+    }
   }
 }
 

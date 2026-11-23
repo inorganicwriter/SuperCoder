@@ -9,17 +9,18 @@ import { copyFileSync, existsSync, readdirSync, readFileSync } from "node:fs";
 import { rm } from "node:fs/promises";
 import { randomUUID } from "node:crypto";
 import { homedir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { METHODS, type MethodName } from "../shared/protocol/methods.js";
 import { resultErr, type RpcResponse } from "../shared/protocol/rpc.js";
 import type { SessionEvent } from "../shared/session/events.js";
 import { ensureDir, writeJsonAtomic } from "./boot/atomic.js";
 import { DEFAULT_SETTINGS, SettingsStore, WorkspacesStore } from "./boot/config.js";
+import { warmUninstallCache } from "./boot/exec.js";
 import { fail, messageOf } from "./boot/failure.js";
 import { createLogger, type Logger } from "./boot/logger.js";
 import { acquireInstanceLock, type LockOutcome } from "./boot/lock.js";
 import type { LogIo } from "./session/log.js";
-import { resolveAppPaths, sessionLogFile, type AppPaths } from "./boot/paths.js";
+import { isSafeId, resolveAppPaths, sessionLogFile, type AppPaths } from "./boot/paths.js";
 import { createEphemeralBackend, SecretStore, type SecretBackend } from "./boot/secrets.js";
 import { createToken } from "./channel/auth.js";
 import { SubscriptionHub } from "./channel/events.js";
@@ -43,11 +44,12 @@ import { ModelCatalog } from "./models/catalog.js";
 import { agentModelConfig, checkAgentModel } from "./models/agent-model.js";
 import type { AgentModelConfig } from "../shared/domain/delegation.js";
 import type { Capsule } from "../shared/domain/capsule.js";
+import { createMcpToolSource } from "./mcp/bridge.js";
 import { McpRegistry } from "./mcp/registry.js";
 import { WorkspaceRegistry } from "./workspace/entity.js";
 import { WorkspaceLocks } from "./workspace/locks.js";
-import { isGitRepo, restoreFiles } from "./workspace/git.js";
-import { collectRewindCandidates } from "./workspace/rewind.js";
+import { hasGitCommit, isGitRepo, listUntrackedFiles, restoreFiles } from "./workspace/git.js";
+import { collectRewindPlan, removeAddedFiles } from "./workspace/rewind.js";
 
 export interface HostOptions {
   /** 覆盖数据目录（测试与便携模式）。 */
@@ -112,7 +114,26 @@ export async function startHost(options: HostOptions = {}): Promise<RunningHost>
 
   const locks = new WorkspaceLocks();
   const agentPermissions = new AgentPermissionPreferences(join(paths.home, "agent-permissions.json"));
-  const select = new ProviderSelect(() => createProviderFamilies({ homeDir: homedir(), configFile: join(paths.home, "agents.json"), allowPermissions: (id) => agentPermissions.get(id) === "allow" }));
+  const select = new ProviderSelect(
+    () =>
+      createProviderFamilies({
+        homeDir: homedir(),
+        configFile: join(paths.home, "agents.json"),
+        allowPermissions: (id) => agentPermissions.get(id) === "allow",
+      }),
+    {
+      prepare: (force) =>
+        warmUninstallCache(
+          [
+            ["DeepSeek Harness", "DeepSeek Harness.exe"],
+            ["OpenCode", "opencode-acp.exe"],
+            ["Antigravity", "agy.exe"],
+            ["Kimi Code", "Kimi Code.exe"],
+          ],
+          force,
+        ),
+    },
+  );
   const agentModels = new AgentModelPreferences(join(paths.home, "agent-models.json"));
   const agentStatuses = async (force = false) => (await select.statuses(force)).map((agent) => {
     const selectedModel = agentModels.get(agent.id);
@@ -177,6 +198,7 @@ export async function startHost(options: HostOptions = {}): Promise<RunningHost>
         taskType: input.taskType,
         ...(input.resumeSessionId === undefined ? {} : { resumeSessionId: input.resumeSessionId }),
         ...(input.parentTaskId === undefined ? {} : { parentTaskId: input.parentTaskId }),
+        ...(input.onActivity === undefined ? {} : { onActivity: input.onActivity }),
         signal: input.signal,
       });
     },
@@ -198,23 +220,26 @@ export async function startHost(options: HostOptions = {}): Promise<RunningHost>
   };
   registerBuiltinTools(registry, builtinServices);
 
-  const pipeline = new ToolPipeline({ registry, approvals, policy: approvalPolicy, logger });
+  const mcp = new McpRegistry({
+    settings: settingsStore,
+    secrets,
+    logger,
+    ...(options.fetchImpl === undefined ? {} : { fetchImpl: options.fetchImpl }),
+  });
+  const externalTools = createMcpToolSource(mcp, logger);
+
+  const pipeline = new ToolPipeline({ registry, approvals, policy: approvalPolicy, externalTools, logger });
   const hub = new AgentHub({
     models,
     tools: pipeline,
     registry,
+    externalTools,
     approvals,
     questions,
     logger,
     language,
     workspacePathOf: (session) => workspacePathOf(session.meta.workspace),
     sharedContext: (session) => sharedContextFor(sessions.capsules(session.meta.workspace), session.sessionId, session.meta.createdAt),
-  });
-  const mcp = new McpRegistry({
-    settings: settingsStore,
-    secrets,
-    logger,
-    ...(options.fetchImpl === undefined ? {} : { fetchImpl: options.fetchImpl }),
   });
 
   const router = new RpcRouter(logger);
@@ -276,19 +301,28 @@ export async function startHost(options: HostOptions = {}): Promise<RunningHost>
       );
     }
     const root = requireWorkspacePath(session.meta.workspace);
-    const candidates = collectRewindCandidates(session.allEvents(), params.toSeq, root);
+    const plan = collectRewindPlan(session.allEvents(), params.toSeq, root);
+    const hasChanges = plan.candidates.length > 0 || plan.addedSinceSnapshot.length > 0;
     // ：工作区不是 git 仓库时中止回撤——不猜文件内容，自建 diff 恢复会二次损坏。
-    if (candidates.length > 0 && !isGitRepo(root)) {
+    if (hasChanges && !isGitRepo(root)) {
       fail(
         "unsupported",
         `当前工作区未初始化 Git 仓库，无法执行文件回撤。请先在工作区初始化 Git 仓库并提交基线代码。`,
       );
     }
+    const filesToDelete =
+      plan.addedSinceSnapshot.length > 0 && isGitRepo(root)
+        ? await (async () => {
+            const untracked = await listUntrackedFiles(root);
+            return plan.addedSinceSnapshot.filter((filePath) => untracked.has(filePath));
+          })()
+        : [];
+    const baselineRef = await readBaselineRef(session.logPath, plan.earliestTaskId, root);
     // 先把文件恢复到位，再落盘两条事件（P2-5）：
     // 反过来会留下"用户要回撤"的悬空意图 —— 文件没恢复，也没有 rewind/completed。
     let restored: string[] = [];
-    if (candidates.length > 0) {
-      const result = await restoreFiles(root, candidates);
+    if (plan.candidates.length > 0) {
+      const result = await restoreFiles(root, plan.candidates, baselineRef);
       if (!result.ok) {
         // 一条事件都不写：让状态停留在"没回撤过"，并且坦白可能已经有文件被动了。
         fail(
@@ -297,6 +331,9 @@ export async function startHost(options: HostOptions = {}): Promise<RunningHost>
         );
       }
       restored = result.value.restored;
+    }
+    if (filesToDelete.length > 0) {
+      restored = [...new Set([...restored, ...removeAddedFiles(root, filesToDelete)])];
     }
     session.append("user/rewind", { toSeq: params.toSeq });
     session.append("rewind/completed", { toSeq: params.toSeq, restoredFiles: restored });
@@ -488,6 +525,13 @@ export async function startHost(options: HostOptions = {}): Promise<RunningHost>
       subscriptions.set(sessionId, unsubscribe);
       return session.since(sinceSeq);
     },
+    onUnsubscribe: (sessionId) => {
+      const previous = subscriptions.get(sessionId);
+      if (previous !== undefined) {
+        previous();
+        subscriptions.delete(sessionId);
+      }
+    },
   });
 
   void mcp.connectEnabled().catch((error: unknown) => {
@@ -547,6 +591,9 @@ function exportDiagnostics(paths: AppPaths, sessionId: string | undefined, logge
     note: "诊断包只包含设置与日志；密钥存放在 secrets.bin，已加密且不在本包内。",
   });
   logger.info({ dir }, "导出诊断包");
+  void pruneDiagnostics(paths, 10).catch((error: unknown) => {
+    logger.warn({ error: messageOf(error) }, "清理旧诊断包失败");
+  });
   return dir;
 }
 
@@ -558,15 +605,21 @@ function readIfPresent(file: string): string | null {
   }
 }
 
+function redactValue(value: unknown): unknown {
+  if (Array.isArray(value)) return value.map(redactValue);
+  if (typeof value !== "object" || value === null) return value;
+  const out: Record<string, unknown> = {};
+  for (const [key, item] of Object.entries(value as Record<string, unknown>)) {
+    out[key] = /secret|token|key|password|authorization/i.test(key) ? "[redacted]" : redactValue(item);
+  }
+  return out;
+}
+
 function redactSettings(raw: string): unknown {
   try {
     const parsed: unknown = JSON.parse(raw);
     if (typeof parsed !== "object" || parsed === null) return null;
-    const record = { ...(parsed as Record<string, unknown>) };
-    for (const key of Object.keys(record)) {
-      if (/secret|token|key|password/i.test(key)) record[key] = "[redacted]";
-    }
-    return record;
+    return redactValue(parsed);
   } catch {
     return null;
   }
@@ -602,4 +655,17 @@ export function sharedContextFor(capsules: readonly Capsule[], sessionId: string
     used += block.length;
   }
   return blocks.join("\n\n");
+}
+
+async function readBaselineRef(logPath: string, taskId: string | null, root: string): Promise<string | undefined> {
+  if (taskId === null || !isSafeId(taskId)) return undefined;
+  const file = join(dirname(logPath), "baselines", `${taskId}.json`);
+  if (!existsSync(file)) return undefined;
+  try {
+    const parsed = JSON.parse(readFileSync(file, "utf8")) as { gitRef?: unknown };
+    if (typeof parsed.gitRef !== "string") return undefined;
+    return (await hasGitCommit(root, parsed.gitRef)) ? parsed.gitRef : undefined;
+  } catch {
+    return undefined;
+  }
 }

@@ -41,6 +41,8 @@ export interface ResolvedProvider {
 export interface ProviderSelectDeps {
   readonly ttlMs?: number;
   readonly now?: () => number;
+  /** 重建家族清单前的异步预热钩子（如异步扫描注册表缓存）。 */
+  readonly prepare?: (force: boolean) => Promise<void>;
 }
 
 export class ProviderSelect {
@@ -72,16 +74,23 @@ export class ProviderSelect {
     return [...families];
   }
 
+  private async ensurePrepared(force = false): Promise<void> {
+    if (typeof this.families !== "function" || this.deps.prepare === undefined) return;
+    if (force || this.familiesCache === null || this.now - this.familiesCache.at >= this.ttl) {
+      await this.deps.prepare(force);
+    }
+  }
+
   /** 探测（带 60 秒缓存）。`force` 对应 `agent.refresh`。 */
   async statuses(force = false): Promise<ProviderStatus[]> {
     if (!force && this.cache !== null && this.now - this.cache.at < this.ttl) {
       return this.cache.statuses;
     }
+    await this.ensurePrepared(force);
     const checkedAt = new Date(this.now).toISOString();
-    const statuses: ProviderStatus[] = [];
-    for (const family of this.familiesList()) {
-      statuses.push(await this.probeFamily(family, checkedAt));
-    }
+    const statuses = await Promise.all(
+      this.familiesList().map((family) => this.probeFamily(family, checkedAt)),
+    );
     this.cache = { at: this.now, statuses };
     return statuses;
   }
@@ -165,6 +174,7 @@ export class ProviderSelect {
 
   /** Candidates are only alternatives until a provider actually submits a task. */
   async resolveCandidates(agentId: string): Promise<ResolvedProvider[]> {
+    await this.ensurePrepared(false);
     const family = this.family(agentId);
     const available: ResolvedProvider[] = [];
     for (const entry of family.entries) {
@@ -193,6 +203,7 @@ export class ProviderSelect {
 
   /** 读历史：优先用能用的接入方式，实在没有就退回第 4 级只读探测。 */
   async listSessions(agentId: string, workspace: string, page: ProviderPage): Promise<ProviderSessionSummary[]> {
+    await this.ensurePrepared(false);
     const family = this.family(agentId);
     for (const entry of family.entries) {
       const installation = await entry.provider.detect().catch(() => ({ installed: false }));
@@ -204,6 +215,7 @@ export class ProviderSelect {
   }
 
   async listModels(agentId: string, workspace: string): Promise<ProviderModel[]> {
+    await this.ensurePrepared(false);
     const family = this.family(agentId);
     let lastError: unknown;
     for (const entry of family.entries) {
@@ -215,6 +227,7 @@ export class ProviderSelect {
   }
 
   async readSession(agentId: string, sessionId: string, page: ProviderPage): Promise<DelegationEvent[]> {
+    await this.ensurePrepared(false);
     const family = this.family(agentId);
     for (const entry of family.entries) {
       const installation = await entry.provider.detect().catch(() => ({ installed: false }));

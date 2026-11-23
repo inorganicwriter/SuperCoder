@@ -14,6 +14,7 @@ import type {
   ChatMessage,
   LlmChunk,
   LlmRequest,
+  LlmToolSpec,
   ToolCallRequest,
 } from "../models/llm.js";
 import type { SessionEvent } from "../../shared/session/events.js";
@@ -21,7 +22,7 @@ import type { ModelCatalog } from "../models/catalog.js";
 import type { SessionHandle } from "../session/handle.js";
 import type { Logger } from "../boot/logger.js";
 import type { ToolPipeline } from "../tools/pipeline.js";
-import type { ToolRegistry } from "../tools/registry.js";
+import type { ExternalToolSource, ToolRegistry } from "../tools/registry.js";
 import type { ApprovalBroker } from "../tools/approval.js";
 import { activeSummary, buildTurnContext } from "./context.js";
 import { COMPRESS_AT, DEFAULT_CONTEXT_TOKENS, compressionCut, estimateTokens, summarize, transcriptFor } from "./compress.js";
@@ -33,6 +34,7 @@ export interface TurnDeps {
   readonly models: ModelCatalog;
   readonly tools: ToolPipeline;
   readonly registry: ToolRegistry;
+  readonly externalTools?: ExternalToolSource;
   readonly approvals: ApprovalBroker;
   readonly logger: Logger;
   readonly language: () => "zh-CN" | "en";
@@ -84,13 +86,18 @@ export class TurnRunner {
     }
 
     const profile = this.deps.models.get(input.modelId);
+    const externalSpecs = (await this.deps.externalTools?.listSpecs().catch(() => [])) ?? [];
+    const toolSpecs: LlmToolSpec[] = [
+      ...this.deps.registry.specs(),
+      ...externalSpecs.map(({ name, description, parameters }) => ({ name, description, parameters })),
+    ];
+    const toolNames = [...this.deps.registry.names(), ...externalSpecs.map((spec) => spec.name)];
     const system = buildSystemPrompt({
       workspacePath: this.deps.workspacePath(),
-      toolNames: this.deps.registry.names(),
+      toolNames,
       language,
       model: profile.model,
     });
-    const toolSpecs = this.deps.registry.specs();
     const shared = this.deps.sharedContext?.(session) ?? "";
     const contextWindow = profile.contextWindow ?? DEFAULT_CONTEXT_TOKENS;
 
@@ -100,6 +107,7 @@ export class TurnRunner {
       // 早期用 `step -= 1` 抵消 for 的自增，只要模型持续返回 retryable 就永不结束。
       const retriedSteps = new Set<number>();
       let step = 0;
+      let finishedNaturally = false;
       while (step < this.maxSteps) {
         if (signal.aborted) {
           status = sawUncertain ? "unknown" : "interrupted";
@@ -126,7 +134,7 @@ export class TurnRunner {
           provider: profile.kind,
           model: profile.model,
           system,
-          toolNames: this.deps.registry.names(),
+          toolNames,
         });
 
         const request: LlmRequest = { messages, tools: toolSpecs, signal };
@@ -174,19 +182,15 @@ export class TurnRunner {
             reason = "model_error";
             break;
           }
-          // C6：超长/可重试错误显式失败并重试一次。重试沿用同一个 step。
+          // C6：超长/可重试错误显式失败并重试一次。重试沿用同一个 step；不写入 assistant/message 以免污染后续上下文。
           retriedSteps.add(step);
-          session.append("assistant/message", {
-            step,
-            text:
-              language === "zh-CN"
-                ? `这一步失败了，正在重试一次：${failure.message}`
-                : `This step failed; retrying once: ${failure.message}`,
-          });
           continue;
         }
 
-        if (calls.length === 0) break;
+        if (calls.length === 0) {
+          finishedNaturally = true;
+          break;
+        }
 
         const workspace = this.deps.workspacePath();
         for (const call of calls) {
@@ -218,6 +222,17 @@ export class TurnRunner {
         }
         // 一次完整步骤（含工具执行）收尾：走到这里才进入下一步。
         step += 1;
+      }
+
+      if (!finishedNaturally && !signal.aborted && reason === undefined && step >= this.maxSteps) {
+        session.append("assistant/message", {
+          step,
+          text:
+            language === "zh-CN"
+              ? `已达到单回合最大工具调用步数上限（${String(this.maxSteps)} 步），当前回合暂告一段落。如需继续执行后续步骤，请直接发送追问。`
+              : `Reached the maximum step limit (${String(this.maxSteps)}) for this turn. Send a follow-up message if you would like me to continue.`,
+        });
+        reason = "max_steps";
       }
 
       if (status === "completed" && signal.aborted) {

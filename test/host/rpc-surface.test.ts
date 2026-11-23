@@ -6,7 +6,7 @@
  * `assertFullCoverage` 保证"方法都注册了"，这些用例保证"注册的能真用"。
  */
 
-import { existsSync, readFileSync, rmSync } from "node:fs";
+import { existsSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import { startHost, type RunningHost } from "../../src/host/index.js";
@@ -291,6 +291,28 @@ describe("RPC Callable Surface", () => {
       const bare = await fixture.call("diagnostics.export", {});
       expect(existsSync(bare.path)).toBe(true);
       expect(existsSync(join(bare.path, "session-log.jsonl"))).toBe(false);
+
+      // 嵌套设置里的敏感字段递归脱敏，且导出总数超过 10 个时自动裁剪旧包。
+      writeFileSync(
+        join(fixture.home, "settings.json"),
+        JSON.stringify({
+          nested: { authToken: "secret-nested-value", headers: [{ apiKey: "secret-item-key" }] },
+        }),
+        "utf8",
+      );
+      const redactedExport = await fixture.call("diagnostics.export", {});
+      const redactedReport = readFileSync(join(redactedExport.path, "report.json"), "utf8");
+      expect(redactedReport).not.toContain("secret-nested-value");
+      expect(redactedReport).not.toContain("secret-item-key");
+      expect(redactedReport).toContain("[redacted]");
+      for (let i = 0; i < 10; i += 1) {
+        await fixture.call("diagnostics.export", {});
+      }
+      const deadline = Date.now() + 3000;
+      while (readdirSync(join(fixture.home, "diagnostics")).length > 10 && Date.now() < deadline) {
+        await new Promise((r) => setTimeout(r, 20));
+      }
+      expect(readdirSync(join(fixture.home, "diagnostics")).length).toBeLessThanOrEqual(10);
     } finally {
       await fixture.cleanup();
     }

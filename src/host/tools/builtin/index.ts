@@ -33,6 +33,7 @@ export interface DispatchToolInput {
   readonly mode: "read-only" | "write";
   readonly resumeSessionId?: string;
   readonly parentTaskId?: string;
+  readonly onActivity?: () => void;
   readonly signal: AbortSignal;
 }
 
@@ -158,6 +159,7 @@ export function registerBuiltinTools(registry: ToolRegistry, services: BuiltinTo
           mode,
           ...(resume === undefined ? {} : { resumeSessionId: resume }),
           ...(args.parent_task_id === undefined ? {} : { parentTaskId: args.parent_task_id }),
+          onActivity: ctx.touch,
           signal: ctx.signal,
         });
       let task = await run(resumeSessionId);
@@ -186,6 +188,11 @@ export function registerBuiltinTools(registry: ToolRegistry, services: BuiltinTo
       const task = services.task(ctx.session.sessionId, args.task_id);
       if (task === null) {
         return toolError("invalid_args", `未找到指定任务：${args.task_id}。`, false);
+      }
+      // 任务已成功返回完整 answer 时不再重复附带流式 output，避免体积翻倍触发截断。
+      if (task.result?.status === "ok" && task.output !== undefined) {
+        const { output: _output, ...compact } = task;
+        return toolOk(compact);
       }
       // 纯读：零模型调用、零 Git 扫描。
       return toolOk(task);

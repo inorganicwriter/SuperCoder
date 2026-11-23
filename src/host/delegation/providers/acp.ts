@@ -216,6 +216,10 @@ export class AcpProvider implements DelegationProvider {
     let answerBuffer = "";
     let phase: DelegationPhase = "handshake";
     let promptSent = false;
+    // 这个回合有没有真的开始干活：收到过模型输出、或有过工具调用通知。
+    // 两者都为 false 时，任何错误都不可能伴随工作区副作用，所以不该报"未知"。
+    let sawOutput = false;
+    let sawToolCall = false;
     let sessionId: string | undefined;
     let exitCode: number | null | undefined;
     let failure: string | null = null;
@@ -231,11 +235,17 @@ export class AcpProvider implements DelegationProvider {
       // session/load replays historical chunks before the new prompt. Those are
       // context, not part of the answer to the new task.
       if (!promptSent) return;
+      if (this.toolCall(notification)) sawToolCall = true;
       const chunk = this.collect(notification, request, () => {
         phase = "turn";
         mark("received");
       });
-      if (chunk !== null) answerBuffer += chunk;
+      if (chunk !== null) {
+        answerBuffer += chunk;
+        sawOutput = true;
+      } else {
+        emit({ type: "trace", summary: "heartbeat" });
+      }
       if (notification.method === "error") failure = "对端报错";
     });
     const offExit = transport.onExit((info) => {
@@ -291,6 +301,7 @@ export class AcpProvider implements DelegationProvider {
           prompt: [{ type: "text", text: buildDelegationPrompt(request) }],
         },
         this.deps.promptTimeoutMs ?? DEFAULT_TIMEOUT_MS,
+        ...(this.deps.promptTimeoutMs === undefined ? [{ idleReset: true }] : []),
       )) as { stopReason?: string };
 
       // 让还在路上的增量通知落袋：ACP 允许先返回 stopReason 再补发最后一条 chunk。
@@ -355,6 +366,16 @@ export class AcpProvider implements DelegationProvider {
       if (request.signal.aborted) return promptSent ? { status: "unknown", observed: "已中断 ACP 进程，无法确认工作区副作用", since: new Date().toISOString() } : { status: "aborted", durationMs: Date.now() - startedAt };
       const category = classify(message);
       if (promptSent) {
+        // 一个回合连一段模型输出、一次工具调用通知都没有，就不可能动过工作区。
+        // 这时候报"结果未知"会把用户叫去核对并不存在的副作用，所以按失败定性；
+        // 认不出类别的错误仍然留在未知态，不硬猜。
+        if (!sawOutput && !sawToolCall && category !== "unknown") {
+          return {
+            status: "failed",
+            diagnostic: diagnostic("turn", category, category === "auth" ? this.authDetail(message) : message),
+            durationMs: Date.now() - startedAt,
+          };
+        }
         return { status: "unknown", observed: message, since: new Date().toISOString() };
       }
       return {
@@ -372,6 +393,26 @@ export class AcpProvider implements DelegationProvider {
 
   async cancel(_handle: DelegationHandle): Promise<void> {
     // 单次 prompt：中断由 AbortSignal 触发的成组终止负责，资源在 finally 关闭。
+  }
+
+  /** ACP 用 `tool_call` / `tool_call_update` 通报工具执行，是"可能动过工作区"的证据。 */
+  private toolCall(notification: RpcNotification): boolean {
+    if (notification.method !== "session/update") return false;
+    const update = asRecord(asRecord(notification.params)["update"]);
+    return update["sessionUpdate"] === "tool_call" || update["sessionUpdate"] === "tool_call_update";
+  }
+
+  /**
+   * 鉴权失败的诊断短句。对端原文常常又长又只适用于它自己的界面
+   * （DSH 会叫用户去它的 web Models 页存密钥），所以换成 SuperCoder 这一侧能做的事。
+   */
+  private authDetail(message: string): string {
+    const route = /provider route "([^"]+)"/.exec(message)?.[1];
+    const head = route === undefined ? "模型路线鉴权失败" : `模型路线 ${route} 鉴权失败`;
+    const next = this.id === "opencode" || this.id === "deepseek-harness"
+      ? "在 Agent 面板改选「SuperCoder 模型」里的档案，或先在该 Agent 里为这条路线配置密钥后重试"
+      : "先在该 Agent 里为这条路线配置密钥后重试";
+    return `${head}｜下一步：${next}。`;
   }
 
   private collect(

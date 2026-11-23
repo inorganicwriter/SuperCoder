@@ -68,6 +68,11 @@ export const AskUserDecisionParams = z.object({
   options: z.array(z.string()).optional(),
 });
 
+export type ToolTimeoutPolicy =
+  | { readonly mode: "fixed"; readonly ms: number }
+  | { readonly mode: "idle"; readonly ms: number }
+  | { readonly mode: "none" };
+
 export interface BuiltinToolSpec {
   readonly name: BuiltinToolName;
   /** 模型看到的描述。产品文案，走 locale 之外的固定英文，模型侧统一。 */
@@ -75,6 +80,8 @@ export interface BuiltinToolSpec {
   readonly params: z.ZodTypeAny;
   /** 会写盘 / 写工作区，需要审批。 */
   readonly mutating: boolean;
+  /** 超时策略：未指定时由 ToolPipeline 使用默认固定超时。 */
+  readonly timeout?: ToolTimeoutPolicy;
 }
 
 export const BUILTIN_TOOLS: Readonly<Record<BuiltinToolName, BuiltinToolSpec>> = {
@@ -91,6 +98,7 @@ export const BUILTIN_TOOLS: Readonly<Record<BuiltinToolName, BuiltinToolSpec>> =
       "Run a direct task with the selected agent. Use context_task_ids when the next stage needs a successful prior result; wait for required results before starting dependent stages.",
     params: DispatchTaskParams,
     mutating: true,
+    timeout: { mode: "idle", ms: 10 * 60 * 1000 },
   },
   query_task_status: {
     name: "query_task_status",
@@ -129,6 +137,7 @@ export const BUILTIN_TOOLS: Readonly<Record<BuiltinToolName, BuiltinToolSpec>> =
       "Ask the user to choose. The turn stays suspended until the user answers or interrupts.",
     params: AskUserDecisionParams,
     mutating: false,
+    timeout: { mode: "none" },
   },
 };
 

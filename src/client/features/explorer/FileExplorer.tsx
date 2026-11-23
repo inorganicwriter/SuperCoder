@@ -39,10 +39,13 @@ interface GitSummary {
 
 type Tab = "files" | "git";
 
-function api(path: string): string {
+function api(path: string): { readonly url: string; readonly headers: Record<string, string> } | null {
   const bootstrap = readBootstrap();
-  if (bootstrap === null) return "";
-  return `http://127.0.0.1:${String(bootstrap.port)}${path}&token=${encodeURIComponent(bootstrap.token)}`;
+  if (bootstrap === null) return null;
+  return {
+    url: `http://127.0.0.1:${String(bootstrap.port)}${path}`,
+    headers: { authorization: `Bearer ${bootstrap.token}` },
+  };
 }
 
 /** 一次目录请求。失败时返回错误说明，不抛。 */
@@ -50,10 +53,10 @@ async function loadDirectory(
   workspaceId: string,
   path: string,
 ): Promise<{ entries: FileEntry[]; error: string | null }> {
-  const url = api(`/files/list?workspaceId=${encodeURIComponent(workspaceId)}&path=${encodeURIComponent(path)}`);
-  if (url === "") return { entries: [], error: t("explorer.noBootstrap") };
+  const req = api(`/files/list?workspaceId=${encodeURIComponent(workspaceId)}&path=${encodeURIComponent(path)}`);
+  if (req === null) return { entries: [], error: t("explorer.noBootstrap") };
   try {
-    const response = await fetch(url);
+    const response = await fetch(req.url, { headers: req.headers });
     const body = (await response.json()) as { entries?: FileEntry[]; error?: string };
     if (!response.ok || body.error !== undefined) {
       return { entries: [], error: body.error ?? t("explorer.readFailed") };
@@ -174,10 +177,10 @@ export function FileExplorer({ workspaceId }: { readonly workspaceId: string }):
     setError(root.error);
     setExpanded({});
     setOpenDirs({});
-    const gitUrl = api(`/git/status?workspaceId=${encodeURIComponent(workspaceId)}`);
-    if (gitUrl === "") return;
+    const gitReq = api(`/git/status?workspaceId=${encodeURIComponent(workspaceId)}`);
+    if (gitReq === null) return;
     try {
-      const response = await fetch(gitUrl);
+      const response = await fetch(gitReq.url, { headers: gitReq.headers });
       if (response.ok) setGit((await response.json()) as GitSummary);
     } catch {
       // git 状态读不到不影响看文件，这里静默。
@@ -205,10 +208,10 @@ export function FileExplorer({ workspaceId }: { readonly workspaceId: string }):
   };
 
   const openFile = async (entry: FileEntry): Promise<void> => {
-    const url = api(`/files/read?workspaceId=${encodeURIComponent(workspaceId)}&path=${encodeURIComponent(entry.path)}`);
-    if (url === "") return;
+    const fileReq = api(`/files/read?workspaceId=${encodeURIComponent(workspaceId)}&path=${encodeURIComponent(entry.path)}`);
+    if (fileReq === null) return;
     try {
-      const response = await fetch(url);
+      const response = await fetch(fileReq.url, { headers: fileReq.headers });
       const body = (await response.json()) as Preview & { error?: string };
       if (!response.ok || body.error !== undefined) {
         setError(body.error ?? t("explorer.readFailed"));

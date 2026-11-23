@@ -103,6 +103,10 @@ export class SessionHandle {
     return this.turn !== null;
   }
 
+  get listenerCount(): number {
+    return this.listeners.size;
+  }
+
   get currentTurnId(): string | null {
     return this.turn?.turnId ?? null;
   }

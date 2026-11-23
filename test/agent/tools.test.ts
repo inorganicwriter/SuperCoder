@@ -17,7 +17,7 @@ import { makeTempHome } from "../helpers/temp.js";
 
 const logger = silentLogger();
 
-function setup(options: { policy?: "ask" | "auto-read" | "never"; timeoutMs?: number } = {}) {
+function setup(options: { policy?: "ask" | "auto-read" | "never"; timeoutMs?: number; idleTimeoutMs?: number } = {}) {
   const home = makeTempHome();
   const store = new SessionStore({ paths: home.paths, logger });
   const sessionId = store.create("ws1", "工具测试").sessionId;
@@ -30,6 +30,7 @@ function setup(options: { policy?: "ask" | "auto-read" | "never"; timeoutMs?: nu
     policy: () => options.policy ?? "ask",
     logger,
     ...(options.timeoutMs === undefined ? {} : { timeoutMs: options.timeoutMs }),
+    ...(options.idleTimeoutMs === undefined ? {} : { idleTimeoutMs: options.idleTimeoutMs }),
   });
   return {
     home,
@@ -256,6 +257,76 @@ describe("Tool Pipeline", () => {
         signal: new AbortController().signal,
       });
       expect(result.outcome.status).toBe("uncertain");
+    } finally {
+      fixture.cleanup();
+    }
+  });
+
+  it("keeps idle-mode dispatch_task alive on ctx.touch() and times out when inactive", async () => {
+    const aliveFixture = setup({ idleTimeoutMs: 60, policy: "never" });
+    try {
+      aliveFixture.registry.register(BUILTIN_TOOLS.dispatch_task, async (_args, ctx) => {
+        for (let step = 0; step < 5; step += 1) {
+          await new Promise((resolve) => setTimeout(resolve, 22));
+          ctx.touch();
+        }
+        return { status: "ok", value: { ok: true } };
+      });
+      const okResult = await aliveFixture.pipeline.run({
+        session: aliveFixture.session,
+        workspaceId: "ws1",
+        workspacePath: aliveFixture.home.home,
+        mode: "write",
+        name: "dispatch_task",
+        args: { agent_id: "codex", task_type: "general", instruction: "keep alive", allow_write: true },
+        signal: new AbortController().signal,
+      });
+      expect(okResult.outcome.status).toBe("ok");
+    } finally {
+      aliveFixture.cleanup();
+    }
+
+    const idleFixture = setup({ idleTimeoutMs: 30, policy: "never" });
+    try {
+      idleFixture.registry.register(BUILTIN_TOOLS.dispatch_task, async () => {
+        await new Promise((resolve) => setTimeout(resolve, 150));
+        return { status: "ok", value: { ok: true } };
+      });
+      const timedOutResult = await idleFixture.pipeline.run({
+        session: idleFixture.session,
+        workspaceId: "ws1",
+        workspacePath: idleFixture.home.home,
+        mode: "write",
+        name: "dispatch_task",
+        args: { agent_id: "codex", task_type: "general", instruction: "stall", allow_write: true },
+        signal: new AbortController().signal,
+      });
+      expect(timedOutResult.outcome.status).toBe("uncertain");
+      if (timedOutResult.outcome.status === "uncertain") {
+        expect(timedOutResult.outcome.detail).toContain("无活动");
+      }
+    } finally {
+      idleFixture.cleanup();
+    }
+  });
+
+  it("does not time out ask_user_decision even when default tool timeout is short", async () => {
+    const fixture = setup({ timeoutMs: 20, policy: "never" });
+    try {
+      fixture.registry.register(BUILTIN_TOOLS.ask_user_decision, async () => {
+        await new Promise((resolve) => setTimeout(resolve, 70));
+        return { status: "ok", value: { answer: "确认" } };
+      });
+      const result = await fixture.pipeline.run({
+        session: fixture.session,
+        workspaceId: "ws1",
+        workspacePath: fixture.home.home,
+        mode: "write",
+        name: "ask_user_decision",
+        args: { question: "继续吗？" },
+        signal: new AbortController().signal,
+      });
+      expect(result.outcome).toEqual({ status: "ok", value: { answer: "确认" } });
     } finally {
       fixture.cleanup();
     }

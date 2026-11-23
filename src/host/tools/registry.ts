@@ -5,10 +5,28 @@
  */
 
 import { z } from "zod";
-import type { BuiltinToolName, BuiltinToolSpec } from "../../shared/domain/builtin-tools.js";
+import type {
+  BuiltinToolName,
+  BuiltinToolSpec,
+  ToolTimeoutPolicy,
+} from "../../shared/domain/builtin-tools.js";
 import type { ToolOutcome } from "../../shared/domain/tool.js";
 import type { SessionHandle } from "../session/handle.js";
 import { jsonSchemaOf, type LlmToolSpec } from "../models/llm.js";
+
+export interface ExternalToolSpec {
+  readonly name: string;
+  readonly description: string;
+  readonly parameters: Record<string, unknown>;
+  readonly mutating: boolean;
+  readonly timeout?: ToolTimeoutPolicy;
+}
+
+export interface ExternalToolSource {
+  listSpecs(): Promise<ExternalToolSpec[]>;
+  getSpec(name: string): ExternalToolSpec | null;
+  execute(name: string, args: unknown, ctx: ToolContext): Promise<ToolOutcome>;
+}
 
 export interface ToolContext {
   readonly session: SessionHandle;
@@ -16,6 +34,8 @@ export interface ToolContext {
   readonly workspacePath: string;
   readonly mode: "read-only" | "write";
   readonly signal: AbortSignal;
+  /** 重置空闲超时计时器（用于外部 Agent 持续产出进度时保活）。 */
+  readonly touch: () => void;
 }
 
 export type ToolExecutor = (args: unknown, ctx: ToolContext) => Promise<ToolOutcome>;

@@ -402,14 +402,16 @@ export class ClientStore {
     }
   }
 
-  async rewind(toSeq: number): Promise<void> {
+  async rewind(toSeq: number): Promise<boolean> {
     const sessionId = this.state.activeSessionId;
-    if (sessionId === null) return;
+    if (sessionId === null) return false;
     this.clearError();
     try {
       await this.connection.rpc("message.rewind", { sessionId, toSeq });
+      return true;
     } catch (error) {
       this.fail(error);
+      return false;
     }
   }
 

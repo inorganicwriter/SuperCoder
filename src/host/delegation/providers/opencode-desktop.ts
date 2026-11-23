@@ -82,7 +82,22 @@ export class OpenCodeDesktopProvider implements DelegationProvider {
       sent = true; request.onEvent({ type: "trace", summary: "delivery:submitted" });
       const separator = request.model?.indexOf("/") ?? -1;
       const model = request.model && separator > 0 ? { providerID: request.model.slice(0, separator), modelID: request.model.slice(separator + 1) } : undefined;
-      const result = asRecord(await this.call(endpoint, `/session/${encodeURIComponent(sessionId)}/message`, { method: "POST", signal: AbortSignal.any([request.signal, AbortSignal.timeout(30 * 60 * 1000)]), body: JSON.stringify({ ...(model ? { model } : {}), parts: [{ type: "text", text: buildDelegationPrompt(request) }] }) }, request.workspace));
+      const pingTimer = setInterval(() => {
+        void this.fetcher(new URL("/global/health", endpoint), { signal: AbortSignal.timeout(2000), redirect: "error" })
+          .then(async (res) => {
+            if (res.ok && asRecord(await res.json())["healthy"] === true) {
+              request.onEvent({ type: "trace", summary: "heartbeat" });
+            }
+          })
+          .catch(() => {});
+      }, 30_000);
+      pingTimer.unref();
+      let result: Record<string, unknown>;
+      try {
+        result = asRecord(await this.call(endpoint, `/session/${encodeURIComponent(sessionId)}/message`, { method: "POST", signal: AbortSignal.any([request.signal, AbortSignal.timeout(30 * 60 * 1000)]), body: JSON.stringify({ ...(model ? { model } : {}), parts: [{ type: "text", text: buildDelegationPrompt(request) }] }) }, request.workspace));
+      } finally {
+        clearInterval(pingTimer);
+      }
       if (asRecord(result["info"])["error"]) throw new Error("OpenCode 回合返回错误");
       const parts = result["parts"];
       const answer = Array.isArray(parts) ? parts.map(asRecord).filter((p) => p["type"] === "text" && typeof p["text"] === "string").map((p) => p["text"]).join("") : "";

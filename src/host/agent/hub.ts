@@ -12,7 +12,7 @@ import { fail } from "../boot/failure.js";
 import type { ModelCatalog } from "../models/catalog.js";
 import type { ApprovalBroker, Decision, RememberScope } from "../tools/approval.js";
 import type { ToolPipeline } from "../tools/pipeline.js";
-import type { ToolRegistry } from "../tools/registry.js";
+import type { ExternalToolSource, ToolRegistry } from "../tools/registry.js";
 import type { QuestionBroker } from "./questions.js";
 import { TurnRunner, type TurnStatus } from "./turn.js";
 
@@ -20,6 +20,7 @@ export interface AgentHubDeps {
   readonly models: ModelCatalog;
   readonly tools: ToolPipeline;
   readonly registry: ToolRegistry;
+  readonly externalTools?: ExternalToolSource;
   readonly approvals: ApprovalBroker;
   readonly questions: QuestionBroker;
   readonly logger: Logger;
@@ -63,6 +64,7 @@ export class AgentHub {
       models: this.deps.models,
       tools: this.deps.tools,
       registry: this.deps.registry,
+      ...(this.deps.externalTools === undefined ? {} : { externalTools: this.deps.externalTools }),
       approvals: this.deps.approvals,
       logger: this.deps.logger,
       language: this.deps.language,

@@ -60,11 +60,12 @@ export async function signInWithGoogle(input: {
     throw new Error(t("account.errorNoBootstrap"));
   }
   const base = `http://127.0.0.1:${String(bootstrap.port)}`;
-  const token = encodeURIComponent(bootstrap.token);
+  const authHeader = { authorization: `Bearer ${bootstrap.token}` };
 
   const { verifier, challenge } = await createPkce();
   const started = await fetch(
-    `${base}/oauth/google/start?clientId=${encodeURIComponent(input.clientId)}&port=${String(bootstrap.port)}&challenge=${challenge}`,
+    `${base}/oauth/google/start?clientId=${encodeURIComponent(input.clientId)}&challenge=${challenge}`,
+    { headers: authHeader },
   );
   const start = (await started.json()) as StartResponse;
   if (!started.ok || start.authUrl === undefined || start.state === undefined) {
@@ -85,7 +86,8 @@ export async function signInWithGoogle(input: {
   while (Date.now() < deadline) {
     await new Promise((resolve) => setTimeout(resolve, POLL_INTERVAL_MS));
     const polled = await fetch(
-      `${base}/oauth/google/pending?state=${encodeURIComponent(start.state)}&token=${token}`,
+      `${base}/oauth/google/pending?state=${encodeURIComponent(start.state)}`,
+      { headers: authHeader },
     );
     const pending = (await polled.json()) as { code?: string | null; error?: string | null };
     if (typeof pending.error === "string" && pending.error !== "") {
@@ -101,9 +103,9 @@ export async function signInWithGoogle(input: {
   }
 
   input.onStage(t("account.stageExchange"));
-  const exchanged = await fetch(`${base}/oauth/google/token?token=${token}`, {
+  const exchanged = await fetch(`${base}/oauth/google/token`, {
     method: "POST",
-    headers: { "content-type": "application/json" },
+    headers: { "content-type": "application/json", ...authHeader },
     body: JSON.stringify({
       code,
       verifier,

@@ -24,8 +24,16 @@
   padding: 4px 10px;
   border: 1px solid var(--sc-border);
   border-radius: 999px;
+  background: transparent;
   color: var(--sc-text-faint);
+  font: inherit;
   font-size: 12px;
+  cursor: pointer;
+}
+
+.truncated:hover {
+  color: var(--sc-text);
+  border-color: var(--sc-border-strong);
 }
 
 .userRow {

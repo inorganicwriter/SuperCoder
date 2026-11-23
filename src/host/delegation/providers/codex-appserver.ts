@@ -182,6 +182,8 @@ export class CodexAppServerProvider implements DelegationProvider {
             streamedItems.add(payload["itemId"]);
             emit({ type: "output", text: payload["delta"] });
             mark("received");
+          } else if (turnSent) {
+            emit({ type: "trace", summary: "heartbeat" });
           }
           return { kind: "progress" };
         }
@@ -195,7 +197,10 @@ export class CodexAppServerProvider implements DelegationProvider {
         }
         if (notification.method === "error" || notification.method === "turn/error") {
           const payload = asRecord(notification.params);
-          if (payload["willRetry"] === true) return { kind: "progress" };
+          if (payload["willRetry"] === true) {
+            if (turnSent) emit({ type: "trace", summary: "heartbeat" });
+            return { kind: "progress" };
+          }
           const error = asRecord(payload["error"]);
           return {
             kind: "failed",
@@ -203,6 +208,7 @@ export class CodexAppServerProvider implements DelegationProvider {
           };
         }
         if (notification.method !== "turn/event" && notification.method !== "item/completed") {
+          if (turnSent) emit({ type: "trace", summary: "heartbeat" });
           return { kind: "progress" };
         }
         const payload = asRecord(notification.params);
@@ -215,11 +221,18 @@ export class CodexAppServerProvider implements DelegationProvider {
             if (previous !== undefined) candidates[at] = { ...previous, toolCallAfter: true };
           }
           toolCallSinceCandidate = false;
+          if (turnSent) emit({ type: "trace", summary: "heartbeat" });
           return { kind: "progress" };
         }
-        if (notification.method === "item/completed" && kind !== "agentMessage") return { kind: "progress" };
+        if (notification.method === "item/completed" && kind !== "agentMessage") {
+          if (turnSent) emit({ type: "trace", summary: "heartbeat" });
+          return { kind: "progress" };
+        }
         const text = typeof item["text"] === "string" ? item["text"] : undefined;
-        if (text === undefined || text === "") return { kind: "progress" };
+        if (text === undefined || text === "") {
+          if (turnSent) emit({ type: "trace", summary: "heartbeat" });
+          return { kind: "progress" };
+        }
         candidates.push({
           phase: typeof item["phase"] === "string" ? item["phase"] : null,
           text,
@@ -319,26 +332,40 @@ export class CodexAppServerProvider implements DelegationProvider {
     inspect: (notification: RpcNotification) => CompletionOutcome,
   ): Promise<CompletionOutcome> {
     const timeoutMs = this.deps.turnTimeoutMs ?? DEFAULT_TURN_TIMEOUT_MS;
+    const idleReset = this.deps.turnTimeoutMs === undefined;
     return new Promise<CompletionOutcome>((resolve) => {
       let settled = false;
+      let timer: NodeJS.Timeout | null = null;
+      const armTimer = (): void => {
+        if (settled) return;
+        if (timer !== null) clearTimeout(timer);
+        timer = setTimeout(
+          () => finish({ kind: "failed", reason: `回合超时（${Math.round(timeoutMs / 1000)} 秒）` }),
+          timeoutMs,
+        );
+        timer.unref();
+      };
       const finish = (outcome: CompletionOutcome): void => {
         if (settled) return;
         settled = true;
         offNotification();
         offExit();
         request.signal.removeEventListener("abort", onAbort);
-        clearTimeout(timer);
+        if (timer !== null) {
+          clearTimeout(timer);
+          timer = null;
+        }
         resolve(outcome);
       };
       const onAbort = (): void => finish({ kind: "aborted" });
-      const timer = setTimeout(
-        () => finish({ kind: "failed", reason: `回合超时（${Math.round(timeoutMs / 1000)} 秒）` }),
-        timeoutMs,
-      );
-      timer.unref();
+      armTimer();
       const offNotification = transport.onNotification((notification) => {
         const verdict = inspect(notification);
-        if (verdict.kind !== "progress") finish(verdict);
+        if (verdict.kind !== "progress") {
+          finish(verdict);
+        } else if (idleReset) {
+          armTimer();
+        }
       });
       const offExit = transport.onExit((info) => finish({ kind: "exited", code: info.code }));
       request.signal.addEventListener("abort", onAbort, { once: true });
@@ -383,7 +410,8 @@ export function classify(message: string): SafeDiagnostic["category"] {
   const table: ReadonlyArray<readonly [RegExp, SafeDiagnostic["category"]]> = [
     [/rate.?limit|too many requests|429|quota/, "limit"],
     [/403|forbidden|access.?policy|not allowed/, "access-policy"],
-    [/401|unauthor|login|token/, "auth"],
+    // `api key` 也算鉴权：ACP 一侧缺密钥时给的是 "no API key for provider route ..."，不带 401。
+    [/401|unauthor|login|token|api.?key/, "auth"],
     [/timeout|timed out|503|502|500|unavailable|overloaded/, "service"],
     [/econn|socket|network|transport|epipe|closed/, "transport"],
     [/json|protocol|unexpected response|parse/, "protocol"],

@@ -7,7 +7,7 @@
  * - 新内容到达时贴底滚动，用户往上翻看时不打断。
  */
 
-import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { memo, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import type { TaskView } from "../../../shared/domain/task.js";
 import type { MessageView, QuestionView, ToolCallView } from "../../../shared/session/derive.js";
 import { t } from "../../locale/index.js";
@@ -92,7 +92,7 @@ function toBlocks(items: readonly Item[]): Block[] {
   return blocks;
 }
 
-function ToolGroup({ tools }: { readonly tools: readonly ToolCallView[] }): JSX.Element {
+const ToolGroup = memo(function ToolGroup({ tools }: { readonly tools: readonly ToolCallView[] }): JSX.Element {
   const failed = tools.filter((tool) => tool.state === "error" || tool.state === "uncertain").length;
   const running = tools.some((tool) => tool.state === "pending" || tool.state === "running" || tool.state === "awaiting-approval");
   const summary =
@@ -119,6 +119,31 @@ function ToolGroup({ tools }: { readonly tools: readonly ToolCallView[] }): JSX.
       </ul>
     </details>
   );
+});
+
+/** 节流流式文本，避免逐 token 触发全量 Markdown + KaTeX 重解析。 */
+function useThrottledValue(value: string, intervalMs = 50): string {
+  const [shown, setShown] = useState(value);
+  const lastUpdatedAt = useRef(0);
+  useEffect(() => {
+    if (value === "") {
+      setShown("");
+      lastUpdatedAt.current = 0;
+      return;
+    }
+    const elapsed = Date.now() - lastUpdatedAt.current;
+    if (elapsed >= intervalMs) {
+      lastUpdatedAt.current = Date.now();
+      setShown(value);
+      return;
+    }
+    const timer = window.setTimeout(() => {
+      lastUpdatedAt.current = Date.now();
+      setShown(value);
+    }, Math.max(1, intervalMs - elapsed));
+    return () => window.clearTimeout(timer);
+  }, [value, intervalMs]);
+  return shown;
 }
 
 /**
@@ -155,6 +180,12 @@ export function Conversation(): JSX.Element {
   const view = state.view;
   const rootRef = useRef<HTMLDivElement>(null);
   const [editing, setEditing] = useState<{ readonly seq: number; readonly text: string } | null>(null);
+  const [visibleLimit, setVisibleLimit] = useState(VISIBLE_LIMIT);
+  const throttledStreaming = useThrottledValue(view?.streaming?.text ?? "");
+
+  useEffect(() => {
+    setVisibleLimit(VISIBLE_LIMIT);
+  }, [view?.sessionId]);
 
   const items = useMemo<Item[]>(() => {
     if (view === null) return [];
@@ -168,7 +199,7 @@ export function Conversation(): JSX.Element {
     return merged.sort((left, right) => left.seq - right.seq);
   }, [view]);
 
-  const hidden = Math.max(0, items.length - VISIBLE_LIMIT);
+  const hidden = Math.max(0, items.length - visibleLimit);
   const blocks = useMemo(() => toBlocks(hidden === 0 ? items : items.slice(hidden)), [items, hidden]);
   const awaiting = (view?.tools ?? []).filter((tool) => tool.state === "awaiting-approval");
   const unanswered = (view?.questions ?? []).filter((question) => question.answer === null && !question.expired);
@@ -183,9 +214,10 @@ export function Conversation(): JSX.Element {
   const submitEdit = async (seq: number, text: string): Promise<void> => {
     const value = text.trim();
     if (value === "") return;
+    // 重新发送＝回撤到这条之前，再把新内容发出去；回撤失败时保留编辑框并中止发送。
+    const rewound = await store.rewind(Math.max(0, seq - 1));
+    if (!rewound) return;
     setEditing(null);
-    // 重新发送＝回撤到这条之前，再把新内容发出去。
-    await store.rewind(Math.max(0, seq - 1));
     await store.send(value);
   };
 
@@ -194,7 +226,15 @@ export function Conversation(): JSX.Element {
 
   return (
     <div ref={rootRef} className={styles.scroller}>
-      {hidden > 0 ? <div className={styles.truncated}>{t("conversation.rewound")}（+{hidden}）</div> : null}
+      {hidden > 0 ? (
+        <button
+          type="button"
+          className={styles.truncated}
+          onClick={() => setVisibleLimit((limit) => limit + VISIBLE_LIMIT)}
+        >
+          {t("conversation.loadMore").replace("{n}", String(hidden))}
+        </button>
+      ) : null}
 
       {blocks.map((block, index) => {
         if (block.kind === "user") {
@@ -266,7 +306,7 @@ export function Conversation(): JSX.Element {
             })}
             {isLast && view.streaming !== null ? (
               <div className={styles.streamingBody} aria-live="polite">
-                <Markdown text={view.streaming.text} className={styles.assistantBody} />
+                <Markdown text={throttledStreaming} className={styles.assistantBody} />
                 <span className={styles.cursor} aria-hidden="true" />
               </div>
             ) : null}
@@ -281,7 +321,7 @@ export function Conversation(): JSX.Element {
             <span className={styles.streamingLabel}>{t("conversation.streaming")}</span>
           </span>
           <div className={styles.streamingBody}>
-            <Markdown text={view.streaming.text} className={styles.assistantBody} />
+            <Markdown text={throttledStreaming} className={styles.assistantBody} />
             <span className={styles.cursor} aria-hidden="true" />
           </div>
         </article>

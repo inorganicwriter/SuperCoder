@@ -149,10 +149,19 @@ export async function exchangeCode(input: {
   }
 }
 
+function escapeHtml(value: string): string {
+  return value
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;")
+    .replace(/'/g, "&#39;");
+}
+
 /** 回调页：给人看的，说完就让人回应用。 */
 export function callbackPage(result: { readonly ok: boolean; readonly reason: string }): string {
-  const title = result.ok ? "登录完成" : "登录没有完成";
-  const detail = result.ok ? "可以关掉这个页面，回到 SuperCoder 了。" : result.reason;
+  const title = escapeHtml(result.ok ? "登录完成" : "登录没有完成");
+  const detail = escapeHtml(result.ok ? "可以关掉这个页面，回到 SuperCoder 了。" : result.reason);
   const color = result.ok ? "#3F7A5E" : "#B4483C";
   return `<!doctype html>
 <html lang="zh-CN"><head><meta charset="utf-8"><title>${title}</title>

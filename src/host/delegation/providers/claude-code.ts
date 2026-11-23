@@ -122,6 +122,7 @@ export class ClaudeCodeProvider implements DelegationProvider {
     const onStdout = (chunk: string): void => {
       // 第一段输出到达就说明 Claude Code 已经接手了这次任务。
       if (!submitted) { submitted = true; emitDelivery("submitted"); }
+      request.onEvent({ type: "trace", summary: "heartbeat" });
       stream.push(chunk);
     };
 
@@ -134,7 +135,9 @@ export class ClaudeCodeProvider implements DelegationProvider {
           : await runProcess(this.deps.binary ?? "claude", args, {
               cwd: request.workspace,
               input: stdin,
-              timeoutMs: this.deps.timeoutMs ?? DEFAULT_TIMEOUT_MS,
+              ...(this.deps.timeoutMs !== undefined
+                ? { timeoutMs: this.deps.timeoutMs }
+                : { idleTimeoutMs: DEFAULT_TIMEOUT_MS }),
               signal: request.signal,
               onStdout,
             });

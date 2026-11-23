@@ -61,6 +61,8 @@ export interface ChannelDeps {
   readonly workspaceRoot: (workspaceId: string) => string;
   /** 订阅时接线并返回 `seq > sinceSeq` 的补发事件。 */
   readonly onSubscribe: (sessionId: string, sinceSeq: number) => Promise<SessionEvent[]>;
+  /** 当某个会话最后一个订阅者切走或断开时回调，便于释放内存监听。 */
+  readonly onUnsubscribe?: (sessionId: string) => void;
   /** 监听端口；0 表示由系统分配。 */
   readonly port?: number;
 }
@@ -73,8 +75,9 @@ export interface RunningChannel {
 
 export async function startChannel(deps: ChannelDeps): Promise<RunningChannel> {
   const pendingAuth = createPendingStore();
+  const issuedStates = new Map<string, number>();
   const server = createServer((req, res) => {
-    void handleHttp(req, res, deps, pendingAuth).catch((error: unknown) => {
+    void handleHttp(req, res, deps, pendingAuth, currentPort(server), issuedStates).catch((error: unknown) => {
       deps.logger.error({ error: messageOf(error) }, "处理 HTTP 请求失败");
       if (!res.headersSent) res.writeHead(500, { "content-type": "text/plain; charset=utf-8" });
       res.end("内部错误\n");
@@ -82,6 +85,7 @@ export async function startChannel(deps: ChannelDeps): Promise<RunningChannel> {
   });
   const wss = new WebSocketServer({ noServer: true, maxPayload: 8 * 1024 * 1024 });
   const clients = new Set<WebSocket>();
+  const subscriberSessions = new Map<string, string>();
 
   server.on("upgrade", (req, socket, head) => {
     const port = currentPort(server);
@@ -110,13 +114,17 @@ export async function startChannel(deps: ChannelDeps): Promise<RunningChannel> {
       if (ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify(frame));
     };
     ws.on("message", (raw: unknown) => {
-      void handleFrame(String(raw), subscriberId, send, deps).catch((error: unknown) => {
+      void handleFrame(String(raw), subscriberId, send, deps, subscriberSessions).catch((error: unknown) => {
         deps.logger.error({ error: messageOf(error) }, "处理客户端帧失败");
       });
     });
     ws.on("close", () => {
       clients.delete(ws);
-      deps.hub.detachSubscriber(subscriberId);
+      subscriberSessions.delete(subscriberId);
+      const dropped = deps.hub.detachSubscriber(subscriberId);
+      for (const sessionId of dropped) {
+        if (!deps.hub.hasSubscriber(sessionId)) deps.onUnsubscribe?.(sessionId);
+      }
     });
     ws.on("error", (error: Error) => {
       deps.logger.warn({ error: error.message }, "WebSocket 错误");
@@ -161,6 +169,7 @@ async function handleFrame(
   subscriberId: string,
   send: (frame: ServerFrame) => void,
   deps: ChannelDeps,
+  subscriberSessions: Map<string, string>,
 ): Promise<void> {
   let json: unknown;
   try {
@@ -179,6 +188,13 @@ async function handleFrame(
     send(await deps.router.dispatch(parsed));
     return;
   }
+
+  const prevSession = subscriberSessions.get(subscriberId);
+  if (prevSession !== undefined && prevSession !== parsed.sessionId) {
+    deps.hub.unsubscribe(prevSession, subscriberId);
+    if (!deps.hub.hasSubscriber(prevSession)) deps.onUnsubscribe?.(prevSession);
+  }
+  subscriberSessions.set(subscriberId, parsed.sessionId);
 
   deps.hub.beginBackfill(parsed.sessionId);
   deps.hub.subscribe(parsed.sessionId, { id: subscriberId, send }, parsed.sinceSeq);
@@ -233,8 +249,10 @@ async function handleHttp(
   res: ServerResponse,
   deps: ChannelDeps,
   pendingAuth: PendingStore,
+  port: number,
+  issuedStates: Map<string, number>,
 ): Promise<void> {
-  if (await handleAuthRoute(req, res, deps, pendingAuth)) return;
+  if (await handleAuthRoute(req, res, deps, pendingAuth, port, issuedStates)) return;
   if (deps.rendererDir === null) {
     res.writeHead(404, { "content-type": "text/plain; charset=utf-8" });
     res.end("SuperCoder host：未配置界面目录\n");
@@ -278,78 +296,118 @@ function pickFile(target: string, root: string): string | null {
   return existsSync(fallback) ? fallback : null;
 }
 
-/** 判断这次请求是不是 Google 登录的三个路由之一；是就处理完返回 true。 */
+const STATE_TTL_MS = 10 * 60 * 1000;
+
+function bearerOrQueryToken(req: IncomingMessage): string {
+  const authHeader = req.headers.authorization;
+  if (typeof authHeader === "string") {
+    const match = /^Bearer\s+(.+)$/i.exec(authHeader.trim());
+    if (match?.[1] !== undefined) return match[1].trim();
+  }
+  return tokenFromUrl(req.url) ?? "";
+}
+
+function verifyLocalHttpAuth(
+  req: IncomingMessage,
+  port: number,
+  expectedToken: string,
+): { readonly ok: true } | { readonly ok: false; readonly status: number; readonly error: string } {
+  const expectedHost = `${LOOPBACK}:${port}`;
+  if (req.headers.host !== expectedHost) {
+    return { ok: false, status: 403, error: "拒绝非本机 Host 请求。" };
+  }
+  if (!tokensEqual(bearerOrQueryToken(req), expectedToken)) {
+    return { ok: false, status: 401, error: "认证令牌无效，请重新启动应用。" };
+  }
+  return { ok: true };
+}
+
+/** 判断这次请求是不是文件栏或 Google 登录的路由之一；是就处理完返回 true。 */
 async function handleAuthRoute(
   req: IncomingMessage,
   res: ServerResponse,
   deps: ChannelDeps,
   pendingAuth: PendingStore,
+  port: number,
+  issuedStates: Map<string, number>,
 ): Promise<boolean> {
   const url = new URL(req.url ?? "/", `http://${LOOPBACK}`);
   if (url.pathname.startsWith("/files/") || url.pathname === "/git/status") {
-  // —— 文件栏：三个只读接口，全部要令牌，路径都在工作区根之内 ——
-  if (url.pathname === "/files/list" && req.method === "GET") {
-    if (!tokensEqual(tokenFromUrl(req.url) ?? "", deps.token)) {
-      sendJson(res, 401, { error: "认证令牌无效，请重新启动应用。" });
+    // —— 文件栏：三个只读接口，全部要令牌与本机 Host，路径都在工作区根之内 ——
+    if (url.pathname === "/files/list" && req.method === "GET") {
+      const auth = verifyLocalHttpAuth(req, port, deps.token);
+      if (!auth.ok) {
+        sendJson(res, auth.status, { error: auth.error });
+        return true;
+      }
+      const root = deps.workspaceRoot(url.searchParams.get("workspaceId") ?? "");
+      if (root === "") {
+        sendJson(res, 400, { error: "未找到指定工作区，请在左侧选择工作区。" });
+        return true;
+      }
+      try {
+        sendJson(res, 200, listDirectory(root, url.searchParams.get("path") ?? ""));
+      } catch (error) {
+        sendJson(res, 400, { error: messageOf(error) });
+      }
       return true;
     }
-    const root = deps.workspaceRoot(url.searchParams.get("workspaceId") ?? "");
-    if (root === "") {
-      sendJson(res, 400, { error: "未找到指定工作区，请在左侧选择工作区。" });
-      return true;
-    }
-    try {
-      sendJson(res, 200, listDirectory(root, url.searchParams.get("path") ?? ""));
-    } catch (error) {
-      sendJson(res, 400, { error: messageOf(error) });
-    }
-    return true;
-  }
 
-  if (url.pathname === "/files/read" && req.method === "GET") {
-    if (!tokensEqual(tokenFromUrl(req.url) ?? "", deps.token)) {
-      sendJson(res, 401, { error: "认证令牌无效，请重新启动应用。" });
+    if (url.pathname === "/files/read" && req.method === "GET") {
+      const auth = verifyLocalHttpAuth(req, port, deps.token);
+      if (!auth.ok) {
+        sendJson(res, auth.status, { error: auth.error });
+        return true;
+      }
+      const root = deps.workspaceRoot(url.searchParams.get("workspaceId") ?? "");
+      if (root === "") {
+        sendJson(res, 400, { error: "未选择工作区，请在左侧选择工作区。" });
+        return true;
+      }
+      try {
+        sendJson(res, 200, readPreview(root, url.searchParams.get("path") ?? ""));
+      } catch (error) {
+        sendJson(res, 400, { error: messageOf(error) });
+      }
       return true;
     }
-    const root = deps.workspaceRoot(url.searchParams.get("workspaceId") ?? "");
-    if (root === "") {
-      sendJson(res, 400, { error: "未选择工作区，请在左侧选择工作区。" });
-      return true;
-    }
-    try {
-      sendJson(res, 200, readPreview(root, url.searchParams.get("path") ?? ""));
-    } catch (error) {
-      sendJson(res, 400, { error: messageOf(error) });
-    }
-    return true;
-  }
 
-  if (url.pathname === "/git/status" && req.method === "GET") {
-    if (!tokensEqual(tokenFromUrl(req.url) ?? "", deps.token)) {
-      sendJson(res, 401, { error: "认证令牌无效，请重新启动应用。" });
+    if (url.pathname === "/git/status" && req.method === "GET") {
+      const auth = verifyLocalHttpAuth(req, port, deps.token);
+      if (!auth.ok) {
+        sendJson(res, auth.status, { error: auth.error });
+        return true;
+      }
+      const root = deps.workspaceRoot(url.searchParams.get("workspaceId") ?? "");
+      if (root === "") {
+        sendJson(res, 400, { error: "未选择工作区，请在左侧选择工作区。" });
+        return true;
+      }
+      sendJson(res, 200, await gitSummary(root));
       return true;
     }
-    const root = deps.workspaceRoot(url.searchParams.get("workspaceId") ?? "");
-    if (root === "") {
-      sendJson(res, 400, { error: "未选择工作区，请在左侧选择工作区。" });
-      return true;
-    }
-    sendJson(res, 200, await gitSummary(root));
-    return true;
-  }
-
   }
   if (!url.pathname.startsWith("/oauth/google/")) return false;
 
   // 授权地址：渲染进程要跳转的目标，含 PKCE 挑战。Goolge 的客户端 ID 由渲染进程保存，这里只拼链接。
   if (url.pathname === "/oauth/google/start" && req.method === "GET") {
+    const auth = verifyLocalHttpAuth(req, port, deps.token);
+    if (!auth.ok) {
+      sendJson(res, auth.status, { error: auth.error });
+      return true;
+    }
     const clientId = url.searchParams.get("clientId") ?? "";
     if (clientId === "") {
       sendJson(res, 400, { error: "缺少客户端 ID，请在设置中配置 Google OAuth 客户端 ID。" });
       return true;
     }
+    const now = Date.now();
+    for (const [key, issuedAt] of issuedStates) {
+      if (now - issuedAt > STATE_TTL_MS) issuedStates.delete(key);
+    }
     const state = randomState();
-    const redirectUri = `http://${LOOPBACK}:${url.searchParams.get("port") ?? ""}/oauth/google/callback`;
+    issuedStates.set(state, now);
+    const redirectUri = `http://${LOOPBACK}:${port}/oauth/google/callback`;
     const authUrl = buildAuthUrl({
       clientId,
       redirectUri,
@@ -362,6 +420,10 @@ async function handleAuthRoute(
 
   // 回跳：浏览器带着 code 或 error 回到这里，写进待领取表，返回一张给人看的页。
   if (url.pathname === "/oauth/google/callback" && req.method === "GET") {
+    if (req.headers.host !== `${LOOPBACK}:${port}`) {
+      sendHtml(res, 403, callbackPage({ ok: false, reason: "回调 Host 与本机服务不匹配，已拒绝。" }));
+      return true;
+    }
     const state = url.searchParams.get("state") ?? "";
     const code = url.searchParams.get("code");
     const error = url.searchParams.get("error");
@@ -369,6 +431,13 @@ async function handleAuthRoute(
       sendHtml(res, 400, callbackPage({ ok: false, reason: "回调里没有 state，无法确认这次登录是从本机发起的。" }));
       return true;
     }
+    const issuedAt = issuedStates.get(state);
+    if (issuedAt === undefined || Date.now() - issuedAt > STATE_TTL_MS) {
+      issuedStates.delete(state);
+      sendHtml(res, 400, callbackPage({ ok: false, reason: "登录 state 无效或已过期，请回到 SuperCoder 重新发起登录。" }));
+      return true;
+    }
+    issuedStates.delete(state);
     pendingAuth.put(state, {
       code: error === null ? code : null,
       error: error === null ? null : `Google 返回了错误：${error}`,
@@ -382,8 +451,9 @@ async function handleAuthRoute(
 
   // 领结果：渲染进程轮询，拿到 code 或错误后这次登录就结束。
   if (url.pathname === "/oauth/google/pending" && req.method === "GET") {
-    if (!tokensEqual(tokenFromUrl(req.url) ?? "", deps.token)) {
-      sendJson(res, 401, { error: "认证令牌无效，请重新启动应用。" });
+    const auth = verifyLocalHttpAuth(req, port, deps.token);
+    if (!auth.ok) {
+      sendJson(res, auth.status, { error: auth.error });
       return true;
     }
     const state = url.searchParams.get("state") ?? "";
@@ -394,8 +464,9 @@ async function handleAuthRoute(
 
   // 换令牌：主进程去连 Google，避免浏览器 CORS 与凭据外露。
   if (url.pathname === "/oauth/google/token" && req.method === "POST") {
-    if (!tokensEqual(tokenFromUrl(req.url) ?? "", deps.token)) {
-      sendJson(res, 401, { error: "认证令牌无效，请重新启动应用。" });
+    const auth = verifyLocalHttpAuth(req, port, deps.token);
+    if (!auth.ok) {
+      sendJson(res, auth.status, { error: auth.error });
       return true;
     }
     const body = await readJsonBody(req);

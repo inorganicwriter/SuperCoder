@@ -17,8 +17,13 @@ export interface RpcNotification {
 export type NotificationListener = (notification: RpcNotification) => void;
 export type ExitListener = (info: { code: number | null; signal: NodeJS.Signals | null }) => void;
 
+export interface RpcRequestOptions {
+  /** 收到来自子进程的 JSON-RPC 通知/请求时是否重置本次请求的超时计时器。 */
+  readonly idleReset?: boolean;
+}
+
 export interface JsonRpcTransport {
-  request(method: string, params: unknown, timeoutMs?: number): Promise<unknown>;
+  request(method: string, params: unknown, timeoutMs?: number, options?: RpcRequestOptions): Promise<unknown>;
   notify(method: string, params: unknown): void;
   onNotification(listener: NotificationListener): () => void;
   onExit(listener: ExitListener): () => void;
@@ -31,7 +36,9 @@ interface PendingRequest {
   readonly method: string;
   readonly resolve: (value: unknown) => void;
   readonly reject: (error: Error) => void;
-  readonly timer: NodeJS.Timeout;
+  readonly timeoutMs: number;
+  readonly idleReset: boolean;
+  timer: NodeJS.Timeout | null;
 }
 
 export class TransportClosedError extends Error {
@@ -58,9 +65,28 @@ export function createStdioTransport(child: ChildProcess, transportOptions: { re
   const exitListeners = new Set<ExitListener>();
   let buffer = "";
 
+  const armTimer = (id: number, request: PendingRequest): void => {
+    if (request.timer !== null) {
+      clearTimeout(request.timer);
+      request.timer = null;
+    }
+    if (request.timeoutMs <= 0 || closed) return;
+    request.timer = setTimeout(() => {
+      pending.delete(id);
+      request.reject(new Error(`${request.method} 超时（${Math.round(request.timeoutMs / 1000)} 秒）`));
+    }, request.timeoutMs);
+    request.timer.unref();
+  };
+
+  const resetIdleTimers = (): void => {
+    for (const [id, request] of pending) {
+      if (request.idleReset) armTimer(id, request);
+    }
+  };
+
   const closeAll = (error: Error): void => {
     for (const [id, request] of pending) {
-      clearTimeout(request.timer);
+      if (request.timer !== null) clearTimeout(request.timer);
       request.reject(error);
       pending.delete(id);
     }
@@ -68,6 +94,7 @@ export function createStdioTransport(child: ChildProcess, transportOptions: { re
 
   const handleMessage = (message: RpcMessage): void => {
     if (typeof message.method === "string") {
+      resetIdleTimers();
       // ACP permissions follow the per-agent policy; unsupported requests fail explicitly.
       if (message.id !== undefined) {
         if (message.method === "session/request_permission") {
@@ -100,7 +127,7 @@ export function createStdioTransport(child: ChildProcess, transportOptions: { re
     const request = pending.get(message.id);
     if (request === undefined) return;
     pending.delete(message.id);
-    clearTimeout(request.timer);
+    if (request.timer !== null) clearTimeout(request.timer);
     if (message.error !== undefined) {
       request.reject(new Error(`${request.method} 失败：${message.error.message ?? "对端报错"}`));
       return;
@@ -143,17 +170,21 @@ export function createStdioTransport(child: ChildProcess, transportOptions: { re
   });
 
   return {
-    request(method, params, timeoutMs = DEFAULT_RPC_TIMEOUT_MS) {
+    request(method, params, timeoutMs = DEFAULT_RPC_TIMEOUT_MS, options = {}) {
       if (closed) return Promise.reject(new TransportClosedError("传输已关闭"));
       const id = nextId;
       nextId += 1;
       return new Promise<unknown>((resolve, reject) => {
-        const timer = setTimeout(() => {
-          pending.delete(id);
-          reject(new Error(`${method} 超时（${Math.round(timeoutMs / 1000)} 秒）`));
-        }, timeoutMs);
-        timer.unref();
-        pending.set(id, { method, resolve, reject, timer });
+        const entry: PendingRequest = {
+          method,
+          resolve,
+          reject,
+          timeoutMs,
+          idleReset: options.idleReset === true,
+          timer: null,
+        };
+        pending.set(id, entry);
+        armTimer(id, entry);
         child.stdin?.write(`${JSON.stringify({ jsonrpc: "2.0", id, method, params })}\n`);
       });
     },
@@ -202,7 +233,7 @@ export class FakeRpcTransport implements JsonRpcTransport {
     return this.steps.length - this.cursor;
   }
 
-  request(method: string): Promise<unknown> {
+  request(method: string, _params?: unknown, _timeoutMs?: number, _options?: RpcRequestOptions): Promise<unknown> {
     if (this.closed) return Promise.reject(new TransportClosedError("传输已关闭"));
     const step = this.steps[this.cursor];
     this.cursor += 1;

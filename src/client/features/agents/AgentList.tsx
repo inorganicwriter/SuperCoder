@@ -2,7 +2,8 @@ import { useEffect, useState } from "react";
 import type { ProviderModel, ProviderStatus } from "../../../shared/domain/provider.js";
 import { t } from "../../locale/index.js";
 import { useClientState, useStore } from "../../render/SessionProvider.js";
-import { Select, type SelectOption } from "../../render/Select.js";
+import { Select } from "../../render/Select.js";
+import { buildModelOptions } from "./model-options.js";
 import styles from "./agents.module.css";
 
 const VIA = { 1: "agent.via1", 2: "agent.via2", 3: "agent.via3", 4: "agent.via4" } as const;
@@ -51,16 +52,18 @@ function AgentRow({ agent }: { agent: ProviderStatus }): JSX.Element {
     void store.listAgentModels(agent.id).then((items) => { if (items !== null) setModels(items); }).finally(() => setLoading(false));
   };
 
-  // 按供应商分组：同组相邻、组内按名称排；SuperCoder 自己的档案单独一组放最后。
-  const native = [...(models ?? [])].sort((left, right) =>
-    (left.provider ?? "").localeCompare(right.provider ?? "") || left.label.localeCompare(right.label));
-  const options: SelectOption[] = [
-    { value: "", label: t("agent.modelPlaceholder") },
-    ...(selected !== "" && !native.some((item) => item.id === selected) && !profiles.some((item) => `profile:${item.id}` === selected)
-      ? [{ value: selected, label: selected }] : []),
-    ...native.map((item) => ({ value: item.id, label: item.label, group: item.provider ?? t("agent.nativeModels"), ...(item.current ? { hint: t("agent.modelCurrent") } : {}) })),
-    ...profiles.map((item) => ({ value: `profile:${item.id}`, label: item.label, hint: item.model, group: t("agent.modelProfile") })),
-  ];
+  const options = buildModelOptions({
+    placeholder: t("agent.modelPlaceholder"),
+    native: models ?? [],
+    profiles,
+    selected,
+    texts: {
+      nativeGroup: t("agent.nativeModels"),
+      profileGroup: t("agent.modelProfile"),
+      inUse: t("agent.modelSelected"),
+      saved: t("agent.modelSaved"),
+    },
+  });
 
   return (
     <li className={styles.card}>

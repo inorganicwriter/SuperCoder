@@ -34,17 +34,24 @@ export interface SessionStoreDeps {
   readonly logIo?: LogIo;
   /** 会话语言跟随用户输入的语言；创建时由调用方决定。 */
   readonly defaultLanguage?: string;
+  /** 内存中最多保留的打开会话句柄数（超出时按 LRU 回收空闲句柄）。 */
+  readonly maxOpen?: number;
+  /** 句柄被 LRU 回收时的回调（可用于日志/测试）。 */
+  readonly onEvict?: (sessionId: string) => void;
 }
 
 const DEFAULT_TITLE = "新会话";
+const DEFAULT_MAX_OPEN_SESSIONS = 20;
 
 export class SessionStore {
   private readonly open = new Map<string, SessionHandle>();
   private readonly cache: DeriveCache;
   private readonly defaultLanguage: string;
+  private readonly maxOpen: number;
 
   constructor(private readonly deps: SessionStoreDeps) {
     this.defaultLanguage = deps.defaultLanguage ?? "zh-CN";
+    this.maxOpen = Math.max(1, deps.maxOpen ?? DEFAULT_MAX_OPEN_SESSIONS);
     this.cache = new DeriveCache((sessionId, header) => ({
       sessionId,
       workspaceId: header.meta.workspace,
@@ -177,7 +184,8 @@ export class SessionStore {
     if (!loaded.ok) throw loadErrorToFailure(loaded.error);
     const handle = loaded.value.handle;
     handle.writeIndex();
-    this.open.set(sessionId, handle);
+    this.touchOpen(sessionId, handle);
+    this.evictIdle(sessionId);
     return { sessionId };
   }
 
@@ -185,7 +193,10 @@ export class SessionStore {
   get(sessionId: string): SessionHandle {
     if (!isSafeId(sessionId)) fail("invalid_params", `会话 id 不合法：${sessionId}`);
     const existing = this.open.get(sessionId);
-    if (existing) return existing;
+    if (existing) {
+      this.touchOpen(sessionId, existing);
+      return existing;
+    }
     const logFile = sessionLogFile(this.deps.paths, sessionId);
     if (!existsSync(logFile)) fail("not_found", `找不到会话 ${sessionId} 的日志`);
     const loaded = SessionHandle.open({
@@ -199,8 +210,9 @@ export class SessionStore {
     });
     if (!loaded.ok) throw loadErrorToFailure(loaded.error);
     const handle = loaded.value.handle;
-    this.open.set(sessionId, handle);
+    this.touchOpen(sessionId, handle);
     this.cache.prime(sessionId, logFile, handle.logHeader, handle.view(), handle.anchorsSnapshot());
+    this.evictIdle(sessionId);
     return handle;
   }
 
@@ -212,7 +224,10 @@ export class SessionStore {
   load(sessionId: string): SessionHandle | null {
     if (!isSafeId(sessionId)) return null;
     const existing = this.open.get(sessionId);
-    if (existing) return existing;
+    if (existing) {
+      this.touchOpen(sessionId, existing);
+      return existing;
+    }
     const logFile = sessionLogFile(this.deps.paths, sessionId);
     if (!existsSync(logFile)) return null;
     const loaded = SessionHandle.open({
@@ -226,9 +241,35 @@ export class SessionStore {
     });
     if (!loaded.ok) throw loadErrorToFailure(loaded.error);
     const handle = loaded.value.handle;
-    this.open.set(sessionId, handle);
+    this.touchOpen(sessionId, handle);
     this.cache.prime(sessionId, logFile, handle.logHeader, handle.view(), handle.anchorsSnapshot());
+    this.evictIdle(sessionId);
     return handle;
+  }
+
+  private touchOpen(sessionId: string, handle: SessionHandle): void {
+    this.open.delete(sessionId);
+    this.open.set(sessionId, handle);
+  }
+
+  private evictIdle(preserveId: string): void {
+    while (this.open.size > this.maxOpen) {
+      let evicted = false;
+      for (const [id, handle] of this.open) {
+        if (id === preserveId || handle.isBusy || handle.listenerCount > 0) continue;
+        try {
+          handle.writeIndex();
+        } catch {
+          // 索引只是缓存：写不进去时下次读取会按日志重算。
+        }
+        handle.close();
+        this.open.delete(id);
+        this.deps.onEvict?.(id);
+        evicted = true;
+        break;
+      }
+      if (!evicted) break;
+    }
   }
 
     maybe(sessionId: string): SessionHandle | null {

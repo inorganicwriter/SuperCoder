@@ -132,7 +132,7 @@ export const zhCN = {
   "conversation.toolOk": "成功",
   "conversation.toolError": "失败",
   "conversation.toolUncertain": "结果未知",
-  "conversation.rewound": "已回撤的历史消息已折叠",
+  "conversation.loadMore": "加载更早的记录（还有 {n} 条）",
   "conversation.streaming": "正在生成",
 
   "approval.title": "操作需要审批",
@@ -164,7 +164,8 @@ export const zhCN = {
   "agent.permissionDeny": "自动拒绝",
   "agent.permissionByTask": "随任务设定",
   "agent.permissionHint": "工具权限只对 ACP 和 Codex app-server 的文件与命令审批生效。",
-  "agent.modelCurrent": "当前默认",
+  "agent.modelSelected": "当前使用",
+  "agent.modelSaved": "已保存",
   "task.progress": "执行过程",
   "task.waitingOutput": "正在等待输出…",
   "task.retryConfirm": "我已确认可能的副作用",

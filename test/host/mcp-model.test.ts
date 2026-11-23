@@ -14,6 +14,19 @@ import {
   OAUTH_REDIRECT,
   buildAuthorizationUrl,
 } from "../../src/host/mcp/oauth.js";
+import { createMcpToolSource } from "../../src/host/mcp/bridge.js";
+import { silentLogger } from "../../src/host/boot/logger.js";
+import { SessionStore } from "../../src/host/session/store.js";
+import { ApprovalBroker } from "../../src/host/tools/approval.js";
+import { ToolPipeline } from "../../src/host/tools/pipeline.js";
+import { ToolRegistry } from "../../src/host/tools/registry.js";
+import { TurnRunner } from "../../src/host/agent/turn.js";
+import { ModelCatalog } from "../../src/host/models/catalog.js";
+import type { LlmChunk, LlmClient, LlmRequest } from "../../src/host/models/llm.js";
+import { SettingsStore } from "../../src/host/boot/config.js";
+import { SecretStore, createTestBackend } from "../../src/host/boot/secrets.js";
+import { makeTempHome } from "../helpers/temp.js";
+import { TEST_MODEL, seedModel } from "../helpers/model.js";
 
 const Answer = z.object({ verdict: z.enum(["ok", "no"]), reasons: z.array(z.string()) });
 
@@ -103,5 +116,109 @@ describe("MCP OAuth Authorization Flow", () => {
 
   it("provides actionable message when target is not a valid URL", async () => {
     await expect(buildAuthorizationUrl("不是网址")).rejects.toThrow(/不是合法 URL/);
+  });
+});
+
+describe("MCP Tool Source Integration", () => {
+  it("exposes MCP tools to TurnRunner and executes them through ToolPipeline", async () => {
+    const home = makeTempHome();
+    const logger = silentLogger();
+    const store = new SessionStore({ paths: home.paths, logger });
+    const session = store.get(store.create("ws1", "MCP 工具").sessionId);
+    const settings = new SettingsStore(home.paths);
+    seedModel(settings);
+    const secrets = new SecretStore(home.paths.secretsFile, createTestBackend());
+    const models = new ModelCatalog({ settings, secrets });
+    const requests: LlmRequest[] = [];
+    let callTurn = 0;
+    const fakeClient: LlmClient = {
+      id: "mcp-test",
+      async *stream(request: LlmRequest): AsyncGenerator<LlmChunk> {
+        requests.push(request);
+        callTurn += 1;
+        if (callTurn === 1) {
+          yield {
+            type: "tool-call",
+            call: { id: "mc1", name: "mcp__fs__read_note", arguments: '{"path":"a.md"}' },
+          };
+          yield { type: "done" };
+          return;
+        }
+        yield { type: "text", text: "读取完成" };
+        yield { type: "done" };
+      },
+    };
+    models.clientFor = (): LlmClient => fakeClient;
+
+    const called: Array<{ serverId: string; name: string; args: Record<string, unknown> }> = [];
+    const externalTools = createMcpToolSource(
+      {
+        tools: async () => [
+          {
+            serverId: "fs",
+            name: "read_note",
+            description: "Read a note",
+            inputSchema: { type: "object", properties: { path: { type: "string" } } },
+          },
+        ],
+        callTool: async (serverId, name, args) => {
+          called.push({ serverId, name, args });
+          return { content: [{ type: "text", text: "note body" }] };
+        },
+      },
+      logger,
+    );
+
+    const registry = new ToolRegistry();
+    const approvals = new ApprovalBroker(logger);
+    const pipeline = new ToolPipeline({
+      registry,
+      approvals,
+      policy: () => "never",
+      externalTools,
+      logger,
+    });
+    const runner = new TurnRunner({
+      models,
+      tools: pipeline,
+      registry,
+      externalTools,
+      approvals,
+      logger,
+      language: () => "zh-CN",
+      workspacePath: () => home.home,
+    });
+
+    try {
+      const status = await runner.run({
+        session,
+        turnId: "turn_mcp",
+        text: "读一下笔记",
+        attachments: [],
+        modelId: TEST_MODEL.id,
+        signal: new AbortController().signal,
+      });
+      expect(status).toBe("completed");
+      expect(requests[0]?.tools.map((t) => t.name)).toContain("mcp__fs__read_note");
+      expect(called).toEqual([{ serverId: "fs", name: "read_note", args: { path: "a.md" } }]);
+      expect(requests[1]?.messages.some((m) => m.role === "tool" && m.content.includes("note body"))).toBe(true);
+
+      const deniedInReadOnly = await pipeline.run({
+        session,
+        workspaceId: "ws1",
+        workspacePath: home.home,
+        mode: "read-only",
+        name: "mcp__fs__read_note",
+        args: { path: "a.md" },
+        signal: new AbortController().signal,
+      });
+      expect(deniedInReadOnly.outcome.status).toBe("error");
+      if (deniedInReadOnly.outcome.status === "error") {
+        expect(deniedInReadOnly.outcome.code).toBe("denied");
+      }
+    } finally {
+      store.closeAll();
+      home.cleanup();
+    }
   });
 });

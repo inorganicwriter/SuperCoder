@@ -69,4 +69,20 @@ describe("SSE Stream Tail Handling", () => {
     expect(chunks.filter((chunk) => chunk.type === "done")).toHaveLength(1);
     expect(chunks.filter((chunk) => chunk.type === "error")).toHaveLength(0);
   });
+
+  it("preserves initial tool call id and name when later delta chunks send empty strings", async () => {
+    const f1 = JSON.stringify({
+      choices: [{ delta: { tool_calls: [{ index: 0, id: "call_abc", function: { name: "dispatch_task", arguments: '{"a":' } }] } }],
+    });
+    const f2 = JSON.stringify({
+      choices: [{ delta: { tool_calls: [{ index: 0, id: "", function: { name: "", arguments: "1}" } }] } }],
+    });
+    const text = `data:${f1}\n\ndata:${f2}\n\ndata:[DONE]`;
+    const chunks = await collect(text);
+    const toolCall = chunks.find((chunk) => chunk.type === "tool-call");
+    expect(toolCall).toEqual({
+      type: "tool-call",
+      call: { id: "call_abc", name: "dispatch_task", arguments: '{"a":1}' },
+    });
+  });
 });

@@ -4,12 +4,14 @@
  */
 
 import { execFileSync } from "node:child_process";
-import { mkdtempSync, mkdirSync, rmSync, statSync, writeFileSync, readFileSync } from "node:fs";
+import { existsSync, mkdtempSync, mkdirSync, rmSync, statSync, writeFileSync, readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { collectRewindCandidates } from "../../src/host/workspace/rewind.js";
-import { isGitRepo, restoreFiles } from "../../src/host/workspace/git.js";
+import { deriveView } from "../../src/shared/session/derive.js";
+import { collectRewindCandidates, collectRewindPlan, removeAddedFiles } from "../../src/host/workspace/rewind.js";
+import { createGitBaseline, isGitRepo, listUntrackedFiles, restoreFiles } from "../../src/host/workspace/git.js";
+import { snapshotWorkspace } from "../../src/host/workspace/snapshot.js";
 import type { SessionEvent } from "../../src/shared/session/events.js";
 
 let root = "";
@@ -104,5 +106,71 @@ describe("Workspace State Restoration", () => {
     const result = await restoreFiles(root, []);
     expect(result.ok).toBe(true);
     if (result.ok) expect(result.value.restored).toEqual([]);
+  });
+
+  it("preserves pre-task dirty edits via git baseline and cleans only newly created untracked files", async () => {
+    execFileSync("git", ["init", "--quiet"], { cwd: root });
+    execFileSync("git", ["config", "user.email", "test@example.com"], { cwd: root });
+    execFileSync("git", ["config", "user.name", "Test"], { cwd: root });
+    writeFileSync(join(root, "tracked.txt"), "HEAD内容\n");
+    execFileSync("git", ["add", "tracked.txt"], { cwd: root });
+    execFileSync("git", ["commit", "--quiet", "-m", "init"], { cwd: root });
+
+    // 用户任务前已有未提交的本地修改和原有的未跟踪文件。
+    writeFileSync(join(root, "tracked.txt"), "用户未提交的改动\n");
+    writeFileSync(join(root, "preexisting.txt"), "原有的未跟踪文件\n");
+    const preSnap = snapshotWorkspace(root);
+    const baselineRef = await createGitBaseline(root);
+    expect(baselineRef).not.toBeNull();
+
+    // Agent 改坏了 tracked.txt，并新建了 agent-new.txt。
+    writeFileSync(join(root, "tracked.txt"), "Agent 写坏的内容，且长度更长\n");
+    writeFileSync(join(root, "agent-new.txt"), "Agent 新建文件\n");
+
+    const events = [snapshot(2, [...preSnap.files])];
+    const plan = collectRewindPlan(events, 1, root);
+    expect(plan.candidates).toContain("tracked.txt");
+    expect(plan.addedSinceSnapshot).toContain("agent-new.txt");
+    expect(plan.addedSinceSnapshot).not.toContain("preexisting.txt");
+
+    const restored = await restoreFiles(root, plan.candidates, baselineRef ?? undefined);
+    expect(restored.ok).toBe(true);
+    expect(readFileSync(join(root, "tracked.txt"), "utf8").trim()).toBe("用户未提交的改动");
+
+    const untracked = await listUntrackedFiles(root);
+    const deleted = removeAddedFiles(
+      root,
+      plan.addedSinceSnapshot.filter((p) => untracked.has(p)),
+    );
+    expect(deleted).toEqual(["agent-new.txt"]);
+    expect(existsSync(join(root, "agent-new.txt"))).toBe(false);
+    expect(existsSync(join(root, "preexisting.txt"))).toBe(true);
+  });
+
+  it("SessionDerivation drops rewound tools, tasks, questions, and unknown status", () => {
+    const view = deriveView(
+      [
+        { type: "turn/start", seq: 1, at: "t", chatId: "s1" },
+        { type: "user/message", seq: 2, at: "t", text: "第一轮", attachments: [] },
+        { type: "assistant/message", seq: 3, at: "t", step: 0, text: "答复一" },
+        { type: "turn/end", seq: 4, at: "t", status: "completed" },
+        { type: "turn/start", seq: 5, at: "t", chatId: "s1" },
+        { type: "user/message", seq: 6, at: "t", text: "第二轮", attachments: [] },
+        { type: "tool/call", seq: 7, at: "t", callId: "c2", name: "dispatch_task", args: {} },
+        { type: "delegation/spawn", seq: 8, at: "t", childId: "t2", provider: "codex", agentId: "codex", goal: "g", instruction: "i", mode: "write" },
+        { type: "delegation/result", seq: 9, at: "t", childId: "t2", result: { status: "unknown", observed: "中断", since: "t" } },
+        { type: "question/asked", seq: 10, at: "t", questionId: "q2", question: "选哪个", options: [] },
+        { type: "turn/end", seq: 11, at: "t", status: "unknown" },
+        { type: "user/rewind", seq: 12, at: "t", toSeq: 4 },
+      ] as SessionEvent[],
+      { sessionId: "s1", workspaceId: "ws1" },
+    );
+    expect(view.messages.map((m) => m.text)).toEqual(["第一轮", "答复一"]);
+    expect(view.tools).toEqual([]);
+    expect(view.tasks).toEqual([]);
+    expect(view.questions).toEqual([]);
+    expect(view.pending).toEqual([]);
+    expect(view.status).toBe("idle");
+    expect(view.counts).toEqual({ user: 1, assistant: 1, tool: 0 });
   });
 });

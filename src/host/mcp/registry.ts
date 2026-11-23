@@ -29,6 +29,7 @@ export interface McpRegistryDeps {
 export class McpRegistry {
   private settings: Settings;
   private readonly states = new Map<string, ConnState>();
+  private readonly connecting = new Map<string, Promise<McpServer>>();
 
   constructor(private readonly deps: McpRegistryDeps) {
     const loaded = deps.settings.load();
@@ -74,8 +75,18 @@ export class McpRegistry {
     });
   }
 
-  /** 连一个服务器。失败写进 lastError，不抛出。 */
+  /** 连一个服务器。失败写进 lastError，不抛出；并发对同一 ID 复用在途连接。 */
   async connect(id: string): Promise<McpServer> {
+    const inflight = this.connecting.get(id);
+    if (inflight !== undefined) return inflight;
+    const task = this.doConnect(id).finally(() => {
+      this.connecting.delete(id);
+    });
+    this.connecting.set(id, task);
+    return task;
+  }
+
+  private async doConnect(id: string): Promise<McpServer> {
     const server = this.settings.mcpServers.find((candidate) => candidate.id === id);
     if (server === undefined) throw new Error(`没有这个 MCP 服务器：${id}`);
     const token = server.oauthSecretKey === undefined ? null : this.deps.secrets.get(server.oauthSecretKey);
@@ -110,8 +121,15 @@ export class McpRegistry {
     return request.url;
   }
 
-  /** 所有已连接服务器的工具，供模型侧使用。 */
+  /** 所有已连接服务器的工具，供模型侧使用。尚未尝试连接的已启用服务会按需懒连接一次。 */
   async tools(): Promise<Array<McpToolInfo & { readonly serverId: string }>> {
+    for (const server of this.settings.mcpServers) {
+      if (!server.enabled) continue;
+      const state = this.states.get(server.id);
+      if (state?.connected === null) {
+        await this.connect(server.id).catch(() => undefined);
+      }
+    }
     const all: Array<McpToolInfo & { readonly serverId: string }> = [];
     for (const [id, state] of this.states) {
       if (state.connection === null) continue;

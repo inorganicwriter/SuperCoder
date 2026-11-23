@@ -6,7 +6,7 @@
  * 数据全部来自任务视图（由 delegation/* 事件派生），这里只负责展示。
  */
 
-import { useEffect, useRef, useState } from "react";
+import { memo, useEffect, useRef, useState } from "react";
 import { isTerminalTaskState, type TaskView } from "../../../shared/domain/task.js";
 import { t } from "../../locale/index.js";
 import { Markdown } from "../../render/Markdown.js";
@@ -24,7 +24,7 @@ const STATE_KEY = {
   unknown: "task.state.unknown",
 } as const;
 
-export function TaskCard({ task }: { readonly task: TaskView }): JSX.Element {
+export const TaskCard = memo(function TaskCard({ task }: { readonly task: TaskView }): JSX.Element {
   const state = useClientState();
   const outputRef = useRef<HTMLDivElement>(null);
   const running = !isTerminalTaskState(task.state);
@@ -88,4 +88,4 @@ export function TaskCard({ task }: { readonly task: TaskView }): JSX.Element {
       </div>
     </details>
   );
-}
+});

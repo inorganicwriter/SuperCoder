@@ -10,7 +10,7 @@ import type { SessionEvent } from "../../shared/session/events.js";
 
 // 长度主要由按 token 计的压缩控制（见 compress.ts）；条数上限只是极端情况下的兜底。
 export const MAX_CONTEXT_MESSAGES = 1000;
-const MAX_TOOL_TEXT = 8_000;
+export const MAX_TOOL_TEXT = 48_000;
 
 export interface ContextInput {
   readonly events: readonly SessionEvent[];
@@ -132,6 +132,9 @@ function flushCalls(messages: ChatMessage[], pending: Map<string, ToolCallReques
 function renderOutcome(outcome: { status: string } & Record<string, unknown>): string {
   const text = JSON.stringify(outcome);
   if (text.length <= MAX_TOOL_TEXT) return text;
-  // 明确标注截断：模型必须知道这不是完整结果。
-  return `${text.slice(0, MAX_TOOL_TEXT)}\n…（结果过长，已截断；需要细节请用更小的范围再查一次）`;
+  // 保留首尾，避免外部 Agent 末尾的最终结论被切掉；同时明确要求不要重复查询同一任务。
+  const headLen = Math.floor(MAX_TOOL_TEXT * 0.6);
+  const tailLen = MAX_TOOL_TEXT - headLen;
+  const omitted = text.length - MAX_TOOL_TEXT;
+  return `${text.slice(0, headLen)}\n…（中间省略 ${omitted} 字符，已保留开头与结尾结论；请直接基于已有内容整理回复，不要重复查询同一任务）…\n${text.slice(-tailLen)}`;
 }

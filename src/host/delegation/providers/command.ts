@@ -23,7 +23,13 @@ export class CommandProvider implements DelegationProvider {
     const start = Date.now();
     request.onEvent({ type: "trace", summary: "delivery:queued" });
     request.onEvent({ type: "trace", summary: "delivery:submitted" });
-    const result = await runProcess(this.binary, this.args, { cwd: request.workspace, input: buildDelegationPrompt(request), timeoutMs: 30 * 60 * 1000, signal: request.signal });
+    const result = await runProcess(this.binary, this.args, {
+      cwd: request.workspace,
+      input: buildDelegationPrompt(request),
+      idleTimeoutMs: 30 * 60 * 1000,
+      onStdout: () => request.onEvent({ type: "trace", summary: "heartbeat" }),
+      signal: request.signal,
+    });
     if (result.timedOut || result.aborted || result.overflowed || result.code !== 0) return { status: "unknown", observed: "自定义命令未正常完成；无法确认工作区副作用", since: new Date().toISOString() };
     if (!result.stdout.trim()) return { status: "failed", diagnostic: diagnostic("collect", "invalid-result", "命令未返回输出"), durationMs: Date.now() - start };
     request.onEvent({ type: "trace", summary: "delivery:returned" });

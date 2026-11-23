@@ -101,7 +101,10 @@ export class CliJsonProvider implements DelegationProvider {
           : await runProcess(this.deps.binary ?? codexBinary(), args, {
               cwd: request.workspace,
               input: stdin,
-              timeoutMs: this.deps.timeoutMs ?? DEFAULT_TIMEOUT_MS,
+              ...(this.deps.timeoutMs !== undefined
+                ? { timeoutMs: this.deps.timeoutMs }
+                : { idleTimeoutMs: DEFAULT_TIMEOUT_MS }),
+              onStdout: () => emit({ type: "trace", summary: "heartbeat" }),
               signal: request.signal,
             });
       emitDelivery("submitted");

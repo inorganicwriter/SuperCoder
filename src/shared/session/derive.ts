@@ -188,6 +188,24 @@ export class SessionDerivation {
         const kept = this.messages.filter((m) => m.seq <= event.toSeq);
         this.messages.length = 0;
         this.messages.push(...kept);
+        for (const [callId, tool] of this.tools) {
+          if (tool.seq > event.toSeq) this.tools.delete(callId);
+        }
+        for (const [childId, task] of this.tasks) {
+          if ((task.seq ?? 0) > event.toSeq) this.tasks.delete(childId);
+        }
+        for (const [questionId, question] of this.questions) {
+          if (question.seq > event.toSeq) this.questions.delete(questionId);
+        }
+        let user = 0;
+        let assistant = 0;
+        for (const m of this.messages) {
+          if (m.role === "user") user += 1;
+          else assistant += 1;
+        }
+        this.counts = { user, assistant, tool: this.tools.size };
+        this.turnUnknownStatus = false;
+        this.streaming = null;
         break;
       }
       case "tool/call": {

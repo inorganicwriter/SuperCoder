@@ -165,6 +165,8 @@ export interface RunResult {
 export interface RunOptions {
   readonly cwd: string;
   readonly timeoutMs?: number;
+  /** 无输出空闲超时（毫秒）。收到 stdout 或 stderr 数据时自动重置。 */
+  readonly idleTimeoutMs?: number;
   readonly signal?: AbortSignal;
   /** prompt / stdin 输入内容，通过标准输入传递以规避参数长度限制与泄露风险。 */
   readonly input?: string;
@@ -232,14 +234,38 @@ export function runProcess(
       return used + chunk.length;
     };
 
-    const timer =
-      options.timeoutMs === undefined
-        ? null
-        : setTimeout(() => {
-            timedOut = true;
-            terminateProcessTree(child);
-          }, options.timeoutMs);
-    timer?.unref();
+    let timer: NodeJS.Timeout | null = null;
+    let idleTimer: NodeJS.Timeout | null = null;
+
+    const resetIdleTimer = (): void => {
+      if (options.idleTimeoutMs === undefined || settled) return;
+      if (idleTimer !== null) clearTimeout(idleTimer);
+      idleTimer = setTimeout(() => {
+        timedOut = true;
+        terminateProcessTree(child);
+      }, options.idleTimeoutMs);
+      idleTimer.unref();
+    };
+
+    const clearTimers = (): void => {
+      if (timer !== null) {
+        clearTimeout(timer);
+        timer = null;
+      }
+      if (idleTimer !== null) {
+        clearTimeout(idleTimer);
+        idleTimer = null;
+      }
+    };
+
+    if (options.timeoutMs !== undefined) {
+      timer = setTimeout(() => {
+        timedOut = true;
+        terminateProcessTree(child);
+      }, options.timeoutMs);
+      timer.unref();
+    }
+    resetIdleTimer();
 
     const onAbort = (): void => {
       aborted = true;
@@ -248,21 +274,23 @@ export function runProcess(
     options.signal?.addEventListener("abort", onAbort, { once: true });
 
     child.stdout?.on("data", (chunk: Buffer) => {
+      resetIdleTimer();
       outBytes = collect(out, chunk, outBytes);
       // 用 StringDecoder：一个汉字的字节可能被拆在两个片段里，直接 toString 会出乱码。
       if (options.onStdout !== undefined) options.onStdout(stdoutDecoder.write(chunk));
     });
     child.stderr?.on("data", (chunk: Buffer) => {
+      resetIdleTimer();
       errBytes = collect(err, chunk, errBytes);
     });
     child.on("error", (error) => {
       err.push(Buffer.from(String(error)));
-      if (timer !== null) clearTimeout(timer);
+      clearTimers();
       options.signal?.removeEventListener("abort", onAbort);
       finish(null, null);
     });
     child.on("close", (code, signal) => {
-      if (timer !== null) clearTimeout(timer);
+      clearTimers();
       options.signal?.removeEventListener("abort", onAbort);
       finish(code, signal);
     });
@@ -360,15 +388,41 @@ export function launchDetached(bin: string, args: readonly string[] = []): void 
 
 const uninstallCache = new Map<string, { at: number; exe: string | null }>();
 
+function parseRegUninstallOutput(
+  text: string,
+  target: string,
+  roots: string[],
+): string | null {
+  for (const line of text.split(/\r?\n/)) {
+    // InstallLocation 是安装根目录，有些程序（Antigravity）把工具装在旁边而不是里面。
+    const location = /InstallLocation\s+REG_(?:SZ|EXPAND_SZ)\s+"?([^",]+)/i.exec(line)?.[1]?.trim();
+    if (location !== undefined && location !== "" && !roots.includes(location)) roots.push(location);
+    const match = /DisplayIcon\s+REG_(?:SZ|EXPAND_SZ)\s+"?([^",]+)/i.exec(line);
+    const candidate = match?.[1]?.trim();
+    if (candidate === undefined) continue;
+    if (candidate.toLowerCase().endsWith(target) && existsSync(candidate)) {
+      return candidate;
+    }
+    // 记下可能的安装目录，稍后再找同名文件。
+    const dir = dirname(candidate);
+    if (!roots.includes(dir)) roots.push(dir);
+  }
+  return null;
+}
+
+function resolveFromRoots(roots: readonly string[], exeName: string): string | null {
+  for (const root of roots) {
+    const hit = findInTree(root, exeName, 2);
+    if (hit !== null) return hit;
+  }
+  return null;
+}
+
 /**
  * 从 Windows 卸载信息（HKCU / HKLM）里按显示名找已安装程序的可执行文件。
  *
  * 安装目录可由用户自选，不能写死路径；卸载信息里的 DisplayIcon 记的就是真实位置。
  * 同步实现：Agent 清单是同步构建的。结果缓存 60 秒，避免每次 RPC 都去查注册表。
- *
- * `exeName` 不一定就是 DisplayIcon 指的那个：OpenCode 的 ACP 入口 `opencode-acp.exe`
- * 和 Antigravity 的 `agy.exe` 都只是同一安装目录里的另一个文件。所以先精确匹配，
- * 再在 DisplayIcon 所在目录（及其子目录，限两层）里找同名文件。
  */
 export function findInstalledExe(displayName: string, exeName: string): string | null {
   if (process.platform !== "win32") return null;
@@ -386,31 +440,51 @@ export function findInstalledExe(displayName: string, exeName: string): string |
     );
     // 注册表 key 名和值都是控制台代码页编码的：中文安装目录必须按 GBK 解，否则路径失效。
     const text = decodeConsoleOutput(result.stdout ?? Buffer.alloc(0));
-    for (const line of text.split(/\r?\n/)) {
-      // InstallLocation 是安装根目录，有些程序（Antigravity）把工具装在旁边而不是里面。
-      const location = /InstallLocation\s+REG_(?:SZ|EXPAND_SZ)\s+"?([^",]+)/i.exec(line)?.[1]?.trim();
-      if (location !== undefined && location !== "" && !roots.includes(location)) roots.push(location);
-      const match = /DisplayIcon\s+REG_(?:SZ|EXPAND_SZ)\s+"?([^",]+)/i.exec(line);
-      const candidate = match?.[1]?.trim();
-      if (candidate === undefined) continue;
-      if (candidate.toLowerCase().endsWith(target) && existsSync(candidate)) {
-        found = candidate;
-        break;
-      }
-      // 记下可能的安装目录，稍后再找同名文件。
-      const dir = dirname(candidate);
-      if (!roots.includes(dir)) roots.push(dir);
-    }
+    found = parseRegUninstallOutput(text, target, roots);
     if (found !== null) break;
   }
-  if (found === null) {
-    for (const root of roots) {
-      found = findInTree(root, exeName, 2);
-      if (found !== null) break;
-    }
-  }
+  if (found === null) found = resolveFromRoots(roots, exeName);
   uninstallCache.set(key, { at: Date.now(), exe: found });
   return found;
+}
+
+/** 异步查 Windows 卸载注册表，避免在 Electron 主进程内阻塞事件循环。 */
+export async function findInstalledExeAsync(
+  displayName: string,
+  exeName: string,
+  options: { readonly force?: boolean } = {},
+): Promise<string | null> {
+  if (process.platform !== "win32") return null;
+  const key = `${displayName}|${exeName}`;
+  const cached = uninstallCache.get(key);
+  if (options.force !== true && cached !== undefined && Date.now() - cached.at < 60_000) {
+    return cached.exe;
+  }
+  const target = exeName.toLowerCase();
+  const roots: string[] = [];
+  let found: string | null = null;
+  for (const hive of ["HKCU", "HKLM"]) {
+    const result = await runProcess(
+      "reg",
+      ["query", `${hive}\\Software\\Microsoft\\Windows\\CurrentVersion\\Uninstall`, "/s", "/f", displayName, "/d"],
+      { cwd: process.cwd(), timeoutMs: 10_000, consoleEncoding: true },
+    );
+    found = parseRegUninstallOutput(result.stdout, target, roots);
+    if (found !== null) break;
+  }
+  if (found === null) found = resolveFromRoots(roots, exeName);
+  uninstallCache.set(key, { at: Date.now(), exe: found });
+  return found;
+}
+
+/** 并发预热卸载注册表缓存，供后续同步构建 Agent 家族清单直接命中缓存。 */
+export async function warmUninstallCache(
+  queries: ReadonlyArray<readonly [string, string]>,
+  force = false,
+): Promise<void> {
+  await Promise.all(
+    queries.map(([displayName, exeName]) => findInstalledExeAsync(displayName, exeName, { force })),
+  );
 }
 
 /** 在目录里按文件名找可执行文件，最多往下 `depth` 层。 */

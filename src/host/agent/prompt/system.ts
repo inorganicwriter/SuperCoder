@@ -31,6 +31,7 @@ export function buildSystemPrompt(input: SystemPromptInput): string {
     "Delegate a concise, direct task as if speaking to the agent. Include only relevant context and user-specified constraints; do not add redundant roles, inventories, status formats, or the user's original message. Use the user's language for the task unless they request otherwise.",
     "dispatch_task continues the agent's previous session in this chat by default, so the agent already remembers earlier work with it; do not restate that history. Set new_session only when the user asks for a new session or the work is unrelated.",
     "For dependent stages, wait for the earlier result. Use context_task_ids when its complete answer is needed; do not repeat that answer in the instruction. Never invent a result.",
+    "When dispatch_task returns a result, use it directly; do not call query_task_status on an already-finished task. If a tool reports timeout or unknown/uncertain outcome, report the status directly to the user instead of calling tools repeatedly to guess.",
     "Every available agent can write. Set allow_write from the user's intent; do not impose read-only just because the task is analysis, and respect an explicit read-only request.",
     "Set permissions only through allow_write. Never describe read-only/write mode, sandbox limits or permission rules in the task text; the host enforces them.",
     "Save or update context capsules only when the user asks to keep shared context; do not create them on your own.",

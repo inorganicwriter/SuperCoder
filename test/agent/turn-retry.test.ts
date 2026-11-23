@@ -26,13 +26,15 @@ const logger = silentLogger();
 class AlwaysFailingClient implements LlmClient {
   readonly id = "always-failing";
   calls = 0;
+  readonly requests: LlmRequest[] = [];
 
   constructor(
     private readonly retryable: boolean,
     private readonly limit = 20,
   ) {}
 
-  async *stream(_request: LlmRequest): AsyncGenerator<LlmChunk> {
+  async *stream(request: LlmRequest): AsyncGenerator<LlmChunk> {
+    this.requests.push(request);
     this.calls += 1;
     if (this.calls > this.limit) {
       throw new Error(`模型调用次数超过上限 ${String(this.limit)}：回合没有结束`);
@@ -105,10 +107,64 @@ describe("Turn Retry Mechanism", () => {
         .filter((event) => event.type === "request/header")
         .map((event) => (event.type === "request/header" ? event.step : -1));
       expect(steps).toEqual([0, 0]);
-      // 两次尝试都记了账。
+      // 两次尝试都记了账，且重试过程不会把临时提示写进模型上下文。
       expect(events.filter((event) => event.type === "assistant/attempt")).toHaveLength(2);
+      const retryMessages = fixture.client.requests[1]?.messages ?? [];
+      expect(retryMessages.some((m) => m.content.includes("正在重试一次"))).toBe(false);
     } finally {
       fixture.cleanup();
+    }
+  });
+
+  it("appends explicit notice and sets reason=max_steps when step limit is reached", async () => {
+    const home = makeTempHome();
+    const store = new SessionStore({ paths: home.paths, logger });
+    const session = store.get(store.create("ws1", "步数上限").sessionId);
+    const settings = new SettingsStore(home.paths);
+    seedModel(settings);
+    const secrets = new SecretStore(home.paths.secretsFile, createTestBackend());
+    const models = new ModelCatalog({ settings, secrets });
+    const loopingClient: LlmClient = {
+      id: "loop",
+      async *stream(): AsyncGenerator<LlmChunk> {
+        yield {
+          type: "tool-call",
+          call: { id: "c1", name: "missing_tool", arguments: "{}" },
+        };
+        yield { type: "done" };
+      },
+    };
+    models.clientFor = (): LlmClient => loopingClient;
+    const registry = new ToolRegistry();
+    const approvals = new ApprovalBroker(logger);
+    const runner = new TurnRunner({
+      models,
+      tools: new ToolPipeline({ registry, approvals, policy: () => "never", logger }),
+      registry,
+      approvals,
+      logger,
+      language: () => "zh-CN",
+      workspacePath: () => home.home,
+      maxSteps: 2,
+    });
+    try {
+      const status = await runner.run({
+        session,
+        turnId: "turn_max",
+        text: "一直调工具",
+        attachments: [],
+        modelId: TEST_MODEL.id,
+        signal: new AbortController().signal,
+      });
+      expect(status).toBe("completed");
+      const events = session.allEvents();
+      const end = events.find((e) => e.type === "turn/end");
+      expect(end).toMatchObject({ type: "turn/end", status: "completed", reason: "max_steps" });
+      const lastMsg = events.filter((e) => e.type === "assistant/message").at(-1);
+      expect(lastMsg?.type === "assistant/message" ? lastMsg.text : "").toContain("最大工具调用步数上限");
+    } finally {
+      store.closeAll();
+      home.cleanup();
     }
   });
 

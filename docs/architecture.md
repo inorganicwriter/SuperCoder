@@ -113,6 +113,8 @@ SuperCoder supports diverse agent runtimes through an extensible provider ladder
 
 - **Task States**: `spawned` &rarr; `queued` &rarr; `submitted` &rarr; `received` &rarr; `returned` (or `failed` / `aborted`).
 - **Uncertain Outcomes**: If a connection drops while a mutating task is in flight, the task transitions to an `unknown` state. The user must manually review and confirm side-effects before any subsequent retry.
+- **`unknown` means "may have touched the workspace", nothing else.** A turn that produced neither a model chunk nor a tool-call notification cannot have had side effects, so a recognised failure there (auth, gateway, transport) is reported as `failed` with an actionable next step instead of asking the user to review side effects.
+- **Model selection mirrors the agent, it does not invent it.** ACP agents report their own catalog, which SuperCoder never stores; model profiles from *Models* are injected per dispatch. The panel lists both, grouped by origin, with provider-qualified labels (agents commonly repeat a name across routes). The "in use" hint follows the saved selection, not the value the agent happens to report as current, because the latter has no effect on what runs.
 
 ---
 

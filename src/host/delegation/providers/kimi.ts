@@ -28,7 +28,7 @@ import type {
   ProviderPage,
   ProviderSessionSummary,
 } from "../../../shared/domain/provider.js";
-import { findInstalledExe, launchDetached } from "../../boot/exec.js";
+import { findInstalledExeAsync, launchDetached } from "../../boot/exec.js";
 import { buildDelegationPrompt } from "../prompt.js";
 import { diagnostic } from "./codex-appserver.js";
 
@@ -66,7 +66,7 @@ const DEFAULT_STARTUP_TIMEOUT_MS = 45_000;
 
 /** 从卸载信息里找 Kimi Code 桌面版的安装位置（安装目录可自选，不写死）。 */
 export async function findKimiExe(homeDir = homedir()): Promise<string | null> {
-  const registered = findInstalledExe("Kimi Code", "Kimi Code.exe");
+  const registered = await findInstalledExeAsync("Kimi Code", "Kimi Code.exe");
   if (registered !== null) return registered;
   const fallback = join(homeDir, "AppData", "Local", "Programs", "Kimi Code", "Kimi Code.exe");
   return existsSync(fallback) ? fallback : null;
@@ -372,7 +372,14 @@ export class KimiCodeProvider implements DelegationProvider {
 
       let outcome: Awaited<ReturnType<KimiCodeProvider["waitForTurn"]>>;
       try {
-        outcome = await this.waitForTurn(endpoint, sessionId, since, request.signal, (text) => request.onEvent({ type: "output", text }));
+        outcome = await this.waitForTurn(
+          endpoint,
+          sessionId,
+          since,
+          request.signal,
+          (text) => request.onEvent({ type: "output", text }),
+          () => request.onEvent({ type: "trace", summary: "heartbeat" }),
+        );
       } finally {
         request.signal.removeEventListener("abort", abortRemote);
       }
@@ -441,6 +448,7 @@ export class KimiCodeProvider implements DelegationProvider {
     since: string,
     signal: AbortSignal,
     onText?: (text: string) => void,
+    onActivity?: () => void,
   ): Promise<
     | { status: "ok" }
     | { status: "aborted" }
@@ -448,7 +456,8 @@ export class KimiCodeProvider implements DelegationProvider {
     | { status: "failed"; category: "limit" | "access-policy" | "service" | "unknown"; detail: string }
   > {
     const timeoutMs = this.deps.turnTimeoutMs ?? DEFAULT_TURN_TIMEOUT_MS;
-    const deadline = Date.now() + timeoutMs;
+    const idleReset = this.deps.turnTimeoutMs === undefined;
+    let deadline = Date.now() + timeoutMs;
     const pollMs = this.deps.pollMs ?? DEFAULT_POLL_MS;
     let sawActive = false;
     // Kimi 没有流式接口，但每完成一步就落一条回复消息：轮询时顺带把本轮新出现的回复转发出去。
@@ -472,6 +481,7 @@ export class KimiCodeProvider implements DelegationProvider {
         if (text === null) continue;
         relayed.add(key);
         onText(relayed.size > 1 ? `\n\n${text}` : text);
+        if (idleReset) deadline = Date.now() + timeoutMs;
       }
     };
     while (Date.now() < deadline) {
@@ -485,7 +495,11 @@ export class KimiCodeProvider implements DelegationProvider {
       ).catch(() => null);
       if (data !== null) {
         const active = data["busy"] === true || data["main_turn_active"] === true;
-        if (active) sawActive = true;
+        if (active) {
+          sawActive = true;
+          onActivity?.();
+          if (idleReset) deadline = Date.now() + timeoutMs;
+        }
         const updatedAt = typeof data["updated_at"] === "string" ? data["updated_at"] : "";
         const touched = updatedAt !== "" && updatedAt >= since;
         if (!active && (sawActive || touched)) {

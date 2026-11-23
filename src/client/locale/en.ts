@@ -132,7 +132,7 @@ export const en: Record<LocaleKey, string> = {
   "conversation.toolOk": "Succeeded",
   "conversation.toolError": "Failed",
   "conversation.toolUncertain": "Outcome unknown",
-  "conversation.rewound": "Earlier messages are collapsed",
+  "conversation.loadMore": "Load earlier items ({n} more)",
   "conversation.streaming": "Generating",
 
   "approval.title": "Approval required",
@@ -164,7 +164,8 @@ export const en: Record<LocaleKey, string> = {
   "agent.permissionDeny": "Automatically deny",
   "agent.permissionByTask": "Follows task mode",
   "agent.permissionHint": "Tool permissions only apply to file and command approvals from ACP and Codex app-server.",
-  "agent.modelCurrent": "Current default",
+  "agent.modelSelected": "In use",
+  "agent.modelSaved": "Saved",
   "task.progress": "Progress",
   "task.waitingOutput": "Waiting for output…",
   "task.retryConfirm": "Side effects confirmed",

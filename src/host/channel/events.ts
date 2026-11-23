@@ -74,6 +74,10 @@ export class SubscriptionHub {
     return this.bySession.size;
   }
 
+  hasSubscriber(sessionId: string): boolean {
+    return this.bySession.has(sessionId);
+  }
+
   sessions(): string[] {
     return [...this.bySession.keys()];
   }

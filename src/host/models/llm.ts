@@ -223,8 +223,8 @@ export class OpenAiCompatibleClient implements LlmClient {
         const index = call.index ?? 0;
         const current = pendingCalls.get(index) ?? { id: "", name: "", arguments: "" };
         pendingCalls.set(index, {
-          id: call.id ?? current.id,
-          name: call.function?.name ?? current.name,
+          id: call.id || current.id,
+          name: call.function?.name || current.name,
           arguments: current.arguments + (call.function?.arguments ?? ""),
         });
       }
