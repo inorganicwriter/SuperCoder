@@ -383,6 +383,41 @@
   font-size: 12.5px;
 }
 
+.blockedRow {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+}
+
+.blockedChip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 2px 8px;
+  border: 1px solid var(--sc-border-strong);
+  border-radius: 999px;
+  background: var(--sc-bg);
+  font-size: 12px;
+}
+
+.allowHostBtn {
+  min-height: 0;
+  padding: 1px 6px;
+  border: 1px solid var(--sc-border-strong);
+  border-radius: 999px;
+  background: transparent;
+  color: var(--sc-text);
+  font-size: 11px;
+  cursor: pointer;
+}
+
+.allowHostBtn:disabled {
+  color: var(--sc-ok);
+  border-color: var(--sc-ok);
+  cursor: default;
+}
+
 .worktreeBadge,
 .worktreeWarn {
   padding: 1px 7px;

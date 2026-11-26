@@ -4,6 +4,7 @@ import { t } from "../../locale/index.js";
 import { useClientState, useStore } from "../../render/SessionProvider.js";
 import { Select } from "../../render/Select.js";
 import { AgentSandboxEditor } from "./AgentSandboxEditor.js";
+import { CustomAgentPanel } from "./CustomAgentPanel.js";
 import { buildModelOptions } from "./model-options.js";
 import styles from "./agents.module.css";
 
@@ -29,6 +30,7 @@ export function AgentList(): JSX.Element {
       {state.agents.length === 0 ? <p className={styles.hint}>{t("agent.none")}</p> : (
         <ul className={styles.list}>{state.agents.map((agent) => <AgentRow key={agent.id} agent={agent} />)}</ul>
       )}
+      <CustomAgentPanel />
     </section>
   );
 }

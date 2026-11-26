@@ -15,10 +15,12 @@ import {
   ENV_KEY_PATTERN,
   isDefaultSandboxProfile,
   isSensitiveEnvKey,
+  matchHostPattern,
   type AgentSandboxProfile,
 } from "../../shared/domain/sandbox.js";
 import { ensureDir, writeJsonAtomic } from "../boot/atomic.js";
 import { buildSanitizedEnv, PROXY_ENV_KEYS } from "../boot/exec.js";
+import { fail } from "../boot/failure.js";
 import type { SecretStore } from "../boot/secrets.js";
 import type { AgentNetworkProxy } from "./network-proxy.js";
 
@@ -163,6 +165,31 @@ export class AgentSandboxPreferences {
     }
     writeJsonAtomic(this.deps.file, all);
     return normalized;
+  }
+
+  allowHost(agentId: string, rawHost: string): AgentSandboxProfile {
+    const host = rawHost.trim().toLowerCase().replace(/^\[|\]$/g, "").replace(/\.+$/, "");
+    if (host === "") fail("invalid_params", "域名不能为空。");
+    const profile = this.get(agentId);
+    if (profile.network.mode === "offline") {
+      fail("denied", "当前 Agent 处于离线模式，请先切换网络策略后再放行域名。");
+    }
+    const nextDenylist = profile.network.denylist.filter((pattern) => !matchHostPattern(host, pattern));
+    const alreadyAllowed =
+      profile.network.allowlist.length === 0 ||
+      profile.network.allowlist.some((pattern) => matchHostPattern(host, pattern));
+    const nextAllowlist = alreadyAllowed
+      ? [...profile.network.allowlist]
+      : [...profile.network.allowlist, host];
+
+    return this.set(agentId, {
+      ...profile,
+      network: {
+        ...profile.network,
+        allowlist: nextAllowlist,
+        denylist: nextDenylist,
+      },
+    });
   }
 
   async compileEnv(

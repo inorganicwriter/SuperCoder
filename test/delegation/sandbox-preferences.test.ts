@@ -124,6 +124,32 @@ describe("AgentSandboxPreferences & buildSanitizedEnv", () => {
     offlineEnv.dispose();
   });
 
+  it("allows blocked hosts in allowlist/denylist while rejecting offline mode", () => {
+    const temp = makeTempHome("sc-allowhost-");
+    cleanups.push(async () => temp.cleanup());
+    const secrets = new SecretStore(temp.paths.secretsFile, createTestBackend());
+    const prefs = new AgentSandboxPreferences({
+      file: join(temp.home, "agent-sandboxes.json"),
+      secrets,
+      sandboxesDir: temp.paths.sandboxesDir,
+    });
+
+    prefs.set("codex", AgentSandboxProfileSchema.parse({
+      network: {
+        mode: "proxy",
+        proxyUrl: "http://127.0.0.1:7890",
+        allowlist: ["api.openai.com"],
+        denylist: ["extra.test", "*.blocked.test"],
+      },
+    }));
+    const updated = prefs.allowHost("codex", "  sub.blocked.test. ");
+    expect(updated.network.allowlist).toEqual(["api.openai.com", "sub.blocked.test"]);
+    expect(updated.network.denylist).toEqual(["extra.test"]);
+
+    prefs.set("claude-code", AgentSandboxProfileSchema.parse({ network: { mode: "offline" } }));
+    expect(() => prefs.allowHost("claude-code", "api.anthropic.com")).toThrow();
+  });
+
   it("skips desktop-only providers when process sandbox overrides are active", async () => {
     const select = new ProviderSelect([
       {

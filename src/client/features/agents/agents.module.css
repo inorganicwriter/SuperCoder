@@ -45,4 +45,11 @@
 .testFail { margin: 0; color: var(--sc-danger); font-size: 12px; }
 .sandboxActions { display: flex; align-items: center; gap: 8px; }
 .savedNote { color: var(--sc-ok); font-size: 12px; }
+.customSection { display: flex; flex-direction: column; gap: 10px; margin-top: 8px; padding-top: 12px; border-top: 1px solid var(--sc-border); }
+.customHeader { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; }
+.customList { display: flex; flex-direction: column; gap: 8px; margin: 0; padding: 0; list-style: none; }
+.customRow { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 8px 10px; border: 1px solid var(--sc-border); border-radius: 8px; background: var(--sc-bg-sunken); }
+.customInfo { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 8px; min-width: 0; font-size: 13px; }
+.customCmd { flex: 1 1 100%; color: var(--sc-text-faint); font-size: 12px; overflow-wrap: anywhere; }
+.customActions { display: flex; flex: none; gap: 6px; }
 @media (max-width: 700px) { .fields { grid-template-columns: minmax(0, 1fr); } }

@@ -29,6 +29,15 @@ export interface FamilyOptions {
   readonly findInstalled?: (displayName: string, exeName: string) => string | null;
 }
 
+export const BUILTIN_AGENT_IDS = [
+  "codex",
+  "opencode",
+  "antigravity",
+  "deepseek-harness",
+  "claude-code",
+  "kimi-code",
+] as const;
+
 export const CustomAgentsSchema = z.object({ agents: z.array(CustomAgentSchema.passthrough()).default([]) }).passthrough();
 
 export function createProviderFamilies(options: FamilyOptions): FamilySpec[] {

@@ -40,6 +40,7 @@ export const TaskCard = memo(function TaskCard({ task }: { readonly task: TaskVi
   const [diffOpen, setDiffOpen] = useState(false);
   const [applying, setApplying] = useState(false);
   const [actionMsg, setActionMsg] = useState<string | null>(null);
+  const [allowedHosts, setAllowedHosts] = useState<readonly string[]>([]);
   const running = !isTerminalTaskState(task.state);
   const hasConflict = task.worktree?.state === "conflict";
   // 进行中或存在 worktree 冲突时保持展开，其它终态自动收起。
@@ -135,7 +136,31 @@ export const TaskCard = memo(function TaskCard({ task }: { readonly task: TaskVi
       <div className={styles.taskBody}>
         <p className={styles.taskGoal}>{task.instruction.trim() !== "" ? task.instruction : task.goal}</p>
         {task.blockedHosts && task.blockedHosts.length > 0 ? (
-          <p className={styles.taskFailure}>{t("task.netBlocked")}: {task.blockedHosts.join(", ")}</p>
+          <div className={styles.blockedRow}>
+            <span className={styles.taskFailure}>{t("task.netBlocked")}:</span>
+            {task.blockedHosts.map((host) => {
+              const isAllowed = allowedHosts.includes(host);
+              return (
+                <span key={host} className={styles.blockedChip}>
+                  <code>{host}</code>
+                  <button
+                    type="button"
+                    className={styles.allowHostBtn}
+                    disabled={isAllowed}
+                    onClick={() => {
+                      void store.allowAgentHost(task.agentId, host).then((ok) => {
+                        if (ok) {
+                          setAllowedHosts((prev) => (prev.includes(host) ? prev : [...prev, host]));
+                        }
+                      });
+                    }}
+                  >
+                    {isAllowed ? t("task.hostAllowed") : t("task.allowHost")}
+                  </button>
+                </span>
+              );
+            })}
+          </div>
         ) : null}
         {body !== null ? (
           <div ref={outputRef} className={styles.taskOutput} aria-live={running ? "polite" : "off"}>

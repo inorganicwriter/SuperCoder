@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import type { ProviderStatus } from "../../../shared/domain/provider.js";
 import {
+  AGENT_ALLOWLIST_PRESETS,
   AgentSandboxProfileSchema,
   DEFAULT_AGENT_SANDBOX_PROFILE,
   ENV_KEY_PATTERN,
@@ -133,6 +134,7 @@ export function AgentSandboxEditor({ agent }: { readonly agent: ProviderStatus }
   const savedKey = JSON.stringify(savedProfile);
   const capabilities = agent.sandboxCapabilities ?? { env: true, network: true, worktree: true };
   const processUnsupported = !capabilities.network && !capabilities.env;
+  const presetDomains = AGENT_ALLOWLIST_PRESETS[agent.id];
 
   const [draft, setDraft] = useState<DraftState>(() => toDraft(savedProfile));
   const [removedSecrets, setRemovedSecrets] = useState<string[]>([]);
@@ -294,7 +296,22 @@ export function AgentSandboxEditor({ agent }: { readonly agent: ProviderStatus }
         <>
           <div className={styles.fields}>
             <label className={styles.field}>
-              <span>{t("agent.allowlist")}</span>
+              <span className={styles.fieldHead}>
+                {t("agent.allowlist")}
+                {presetDomains !== undefined ? (
+                  <button
+                    type="button"
+                    className={styles.link}
+                    onClick={() => {
+                      setSavedFlag(false);
+                      const merged = [...new Set([...splitList(draft.allowlistText), ...presetDomains])];
+                      setDraft((prev) => ({ ...prev, allowlistText: merged.join(", ") }));
+                    }}
+                  >
+                    {t("agent.allowlistPreset")}
+                  </button>
+                ) : null}
+              </span>
               <input
                 type="text"
                 className={styles.input}

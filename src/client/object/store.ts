@@ -9,6 +9,7 @@ import { SessionDerivation, type DerivedView } from "../../shared/session/derive
 import { isTransientEvent, type SessionEvent } from "../../shared/session/events.js";
 import type { SessionSummary } from "../../shared/session/derive.js";
 import type { Capsule } from "../../shared/domain/capsule.js";
+import type { CustomAgent } from "../../shared/domain/custom-agent.js";
 import type { McpServer } from "../../shared/domain/mcp.js";
 import type { ModelProfile, ModelProfileView } from "../../shared/domain/model.js";
 import type { ProviderStatus } from "../../shared/domain/provider.js";
@@ -57,6 +58,7 @@ export interface ClientState {
   readonly view: DerivedView | null;
   readonly tasks: readonly TaskView[];
   readonly agents: readonly ProviderStatus[];
+  readonly customAgents: readonly CustomAgent[];
   readonly models: readonly ModelProfileView[];
   readonly servers: readonly McpServer[];
   readonly capsules: readonly Capsule[];
@@ -74,6 +76,7 @@ const EMPTY: ClientState = {
   view: null,
   tasks: [],
   agents: [],
+  customAgents: [],
   models: [],
   servers: [],
   capsules: [],
@@ -165,12 +168,13 @@ export class ClientStore {
         activeId = workspaces.activeId !== "" ? workspaces.activeId : (workspaces.items[0]?.id ?? "");
       }
       this.patch({ workspaces: workspaces.items, activeWorkspaceId: activeId });
-      const [agents, models, servers] = await Promise.all([
+      const [agents, customAgents, models, servers] = await Promise.all([
         this.connection.rpc("agent.list", {}),
+        this.connection.rpc("agent.custom.list", {}),
         this.connection.rpc("model.list", {}),
         this.connection.rpc("mcp.list", {}),
       ]);
-      this.patch({ agents, models, servers });
+      this.patch({ agents, customAgents, models, servers });
       if (activeId !== "") await this.loadSessions(activeId);
     } catch (error) {
       this.fail(error);
@@ -536,6 +540,48 @@ export class ClientStore {
     } catch (error) {
       this.fail(error);
       return null;
+    }
+  }
+
+  async allowAgentHost(agentId: string, host: string): Promise<boolean> {
+    this.clearError();
+    try {
+      await this.connection.rpc("agent.sandbox.allowHost", { agentId, host });
+      this.patch({ agents: await this.connection.rpc("agent.list", {}) });
+      return true;
+    } catch (error) {
+      this.fail(error);
+      return false;
+    }
+  }
+
+  async saveCustomAgent(agent: CustomAgent): Promise<boolean> {
+    this.clearError();
+    try {
+      await this.connection.rpc("agent.custom.upsert", { agent });
+      const [customAgents, agents] = await Promise.all([
+        this.connection.rpc("agent.custom.list", {}),
+        this.connection.rpc("agent.list", {}),
+      ]);
+      this.patch({ customAgents, agents });
+      return true;
+    } catch (error) {
+      this.fail(error);
+      return false;
+    }
+  }
+
+  async removeCustomAgent(id: string): Promise<void> {
+    this.clearError();
+    try {
+      await this.connection.rpc("agent.custom.remove", { id });
+      const [customAgents, agents] = await Promise.all([
+        this.connection.rpc("agent.custom.list", {}),
+        this.connection.rpc("agent.list", {}),
+      ]);
+      this.patch({ customAgents, agents });
+    } catch (error) {
+      this.fail(error);
     }
   }
 

@@ -90,6 +90,15 @@ export type AgentSandboxProfile = z.infer<typeof AgentSandboxProfileSchema>;
 
 export const DEFAULT_AGENT_SANDBOX_PROFILE: AgentSandboxProfile = AgentSandboxProfileSchema.parse({});
 
+export const AGENT_ALLOWLIST_PRESETS: Readonly<Record<string, readonly string[]>> = {
+  codex: ["*.openai.com", "*.chatgpt.com"],
+  "claude-code": ["*.anthropic.com", "api.claude.ai"],
+  "deepseek-harness": ["api.deepseek.com", "*.deepseek.com"],
+  opencode: ["*.openai.com", "*.anthropic.com", "api.deepseek.com"],
+  antigravity: ["*.googleapis.com", "*.google.com"],
+  "kimi-code": ["api.moonshot.cn", "*.moonshot.cn", "*.kimi.com"],
+};
+
 export const SandboxCapabilitiesSchema = z.object({
   env: z.boolean(),
   network: z.boolean(),

@@ -73,7 +73,7 @@ describe("RPC Callable Surface", () => {
     try {
       const registered = fixture.host.router.methods().sort();
       expect(registered).toEqual(Object.keys(METHODS).sort());
-      expect(registered).toHaveLength(44);
+      expect(registered).toHaveLength(48);
     } finally {
       await fixture.cleanup();
     }
@@ -203,6 +203,43 @@ describe("RPC Callable Surface", () => {
       expect(wrongSession.code).toBe("not_found");
       const alreadyMerged = await fixture.errorOf("task.worktree.apply", { sessionId, taskId: "t_done" });
       expect(alreadyMerged.code).toBe("denied");
+
+      // Part 2: agent.sandbox.allowHost 与 agent.custom.* 生命周期
+      const allowedProfile = await fixture.call("agent.sandbox.allowHost", {
+        agentId: "codex",
+        host: "extra.example.com",
+      });
+      expect(allowedProfile.network.allowlist).toContain("extra.example.com");
+
+      await fixture.call("agent.sandbox.set", {
+        agentId: "claude-code",
+        sandbox: {
+          network: { mode: "offline", noProxy: [], allowlist: [], denylist: [] },
+          env: { set: {}, secretKeys: [], unset: [], prependPath: [], isolatedHome: false },
+          workspace: { isolation: "shared" },
+        },
+      });
+      const offlineErr = await fixture.errorOf("agent.sandbox.allowHost", {
+        agentId: "claude-code",
+        host: "api.anthropic.com",
+      });
+      expect(offlineErr.code).toBe("denied");
+
+      const dupErr = await fixture.errorOf("agent.custom.upsert", {
+        agent: { id: "codex", label: "Dup", protocol: "acp", binary: "codex", args: [], enabled: true },
+      });
+      expect(dupErr.code).toBe("invalid_params");
+
+      const customSaved = await fixture.call("agent.custom.upsert", {
+        agent: { id: "custom-cli", label: "Custom CLI", protocol: "command", binary: "echo", args: ["hi"], enabled: true },
+      });
+      expect(customSaved.id).toBe("custom-cli");
+      expect((await fixture.call("agent.custom.list", {})).map((a) => a.id)).toEqual(["custom-cli"]);
+      expect((await fixture.call("agent.list", {})).some((a) => a.id === "custom-cli")).toBe(true);
+
+      await fixture.call("agent.custom.remove", { id: "custom-cli" });
+      expect(await fixture.call("agent.custom.list", {})).toEqual([]);
+      expect((await fixture.call("agent.list", {})).some((a) => a.id === "custom-cli")).toBe(false);
     } finally {
       await fixture.cleanup();
     }

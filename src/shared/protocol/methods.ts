@@ -7,6 +7,7 @@
 
 import { z } from "zod";
 import { CapsuleSchema } from "../domain/capsule.js";
+import { CustomAgentSchema } from "../domain/custom-agent.js";
 import { McpServerInputSchema, McpServerSchema } from "../domain/mcp.js";
 import { ModelProfileSchema, ModelProfileViewSchema, ModelTestResultSchema } from "../domain/model.js";
 import { ProviderModelSchema, ProviderStatusSchema } from "../domain/provider.js";
@@ -184,6 +185,25 @@ export const METHODS = {
       sandbox: AgentSandboxProfileSchema.optional(),
     }),
     result: SandboxTestResultSchema,
+  },
+  "agent.sandbox.allowHost": {
+    params: z.object({
+      agentId: z.string().min(1),
+      host: z.string().trim().min(1).max(256),
+    }),
+    result: AgentSandboxProfileSchema,
+  },
+  "agent.custom.list": {
+    params: Empty,
+    result: z.array(CustomAgentSchema),
+  },
+  "agent.custom.upsert": {
+    params: z.object({ agent: CustomAgentSchema }),
+    result: CustomAgentSchema,
+  },
+  "agent.custom.remove": {
+    params: z.object({ id: z.string().min(1) }),
+    result: Empty,
   },
 
   "model.list": {

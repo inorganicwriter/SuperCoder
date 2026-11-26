@@ -34,9 +34,10 @@ import { ApprovalBroker } from "./tools/approval.js";
 import { ToolPipeline } from "./tools/pipeline.js";
 import { registerBuiltinTools, type BuiltinToolServices } from "./tools/builtin/index.js";
 import { DelegationRunner } from "./delegation/run.js";
+import { CustomAgentsStore } from "./delegation/custom-agents.js";
 import { AgentNetworkProxy } from "./delegation/network-proxy.js";
 import { ProviderSelect } from "./delegation/provider-select.js";
-import { createProviderFamilies } from "./delegation/registry.js";
+import { BUILTIN_AGENT_IDS, createProviderFamilies } from "./delegation/registry.js";
 import { AgentPermissionPreferences } from "./delegation/permission-preferences.js";
 import { AgentSandboxPreferences } from "./delegation/sandbox-preferences.js";
 import { AcpProvider } from "./delegation/providers/acp.js";
@@ -125,6 +126,7 @@ export async function startHost(options: HostOptions = {}): Promise<RunningHost>
 
   const locks = new WorkspaceLocks();
   const networkProxy = new AgentNetworkProxy();
+  const customAgents = new CustomAgentsStore(join(paths.home, "agents.json"));
   const agentPermissions = new AgentPermissionPreferences(join(paths.home, "agent-permissions.json"));
   const agentSandboxes = new AgentSandboxPreferences({
     file: join(paths.home, "agent-sandboxes.json"),
@@ -538,6 +540,25 @@ export async function startHost(options: HostOptions = {}): Promise<RunningHost>
     const profile = params.sandbox ?? agentSandboxes.get(params.agentId);
     return networkProxy.testNetwork(profile, params.targetUrl);
   });
+  router.register("agent.sandbox.allowHost", (params) => {
+    select.family(params.agentId);
+    const updated = agentSandboxes.allowHost(params.agentId, params.host);
+    select.invalidate();
+    return updated;
+  });
+  router.register("agent.custom.list", () => customAgents.list());
+  router.register("agent.custom.upsert", (params) => {
+    const saved = customAgents.upsert(params.agent, BUILTIN_AGENT_IDS);
+    select.invalidate();
+    return saved;
+  });
+  router.register("agent.custom.remove", (params) => {
+    if (!customAgents.remove(params.id)) {
+      fail("not_found", `未找到自定义 Agent：${params.id}。`);
+    }
+    select.invalidate();
+    return {};
+  });
 
   // —— model ——
   router.register("model.list", () => models.list());
@@ -693,7 +714,7 @@ export async function startHost(options: HostOptions = {}): Promise<RunningHost>
 /** 方法数量变化时同步检查协议与注册面。 */
 function assertMethodCount(): void {
   const count = Object.keys(METHODS).length;
-  if (count !== 44) throw new Error(`RPC 方法数量应为 44，实际 ${count}`);
+  if (count !== 48) throw new Error(`RPC 方法数量应为 48，实际 ${count}`);
 }
 
 /** 诊断包：脱敏设置 + 会话日志 + 说明；不含任何密钥。 */
