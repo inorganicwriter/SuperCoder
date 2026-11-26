@@ -13,6 +13,9 @@
 
 import { randomUUID } from "node:crypto";
 import { dirname, join } from "node:path";
+import {
+  hasActiveProcessSandboxOverrides,
+} from "../../shared/domain/sandbox.js";
 import type {
   DelegationEvent,
   DelegationResult,
@@ -26,8 +29,18 @@ import { fail, isRpcFailure, messageOf } from "../boot/failure.js";
 import type { SessionHandle } from "../session/handle.js";
 import { createGitBaseline } from "../workspace/git.js";
 import { snapshotWorkspace } from "../workspace/snapshot.js";
+import {
+  applyTaskWorktree,
+  commitWorktreeChanges,
+  createTaskWorktree,
+  removeTaskWorktree,
+  writeWorktreeMeta,
+  type WorktreeMeta,
+} from "../workspace/worktree.js";
 import type { WorkspaceLocks } from "../workspace/locks.js";
+import type { AgentNetworkProxy } from "./network-proxy.js";
 import type { ProviderSelect } from "./provider-select.js";
+import type { AgentSandboxPreferences, CompiledSandboxEnv } from "./sandbox-preferences.js";
 
 /** 流式输出落盘的聚合窗口（毫秒）。 */
 const OUTPUT_FLUSH_MS = 80;
@@ -36,6 +49,9 @@ export interface DelegationRunnerDeps {
   readonly select: ProviderSelect;
   readonly locks: WorkspaceLocks;
   readonly logger: Logger;
+  readonly sandboxes?: AgentSandboxPreferences;
+  readonly networkProxy?: AgentNetworkProxy;
+  readonly worktreesDir?: string;
 }
 
 export interface DispatchInput {
@@ -68,8 +84,25 @@ export interface RetryInput {
 
 export class DelegationRunner {
   private readonly inflight = new Map<string, AbortController>();
+  private readonly mergeChains = new Map<string, Promise<void>>();
 
   constructor(private readonly deps: DelegationRunnerDeps) {}
+
+  /** 串行化同一主工作区的 worktree 自动合入，保证并行写任务不会互相踩踏。 */
+  withMergeLock<T>(workspaceId: string, fn: () => Promise<T>): Promise<T> {
+    const previous = this.mergeChains.get(workspaceId) ?? Promise.resolve();
+    const run = previous.then(fn, fn);
+    const tail = run.then(
+      () => {
+        if (this.mergeChains.get(workspaceId) === tail) this.mergeChains.delete(workspaceId);
+      },
+      () => {
+        if (this.mergeChains.get(workspaceId) === tail) this.mergeChains.delete(workspaceId);
+      },
+    );
+    this.mergeChains.set(workspaceId, tail);
+    return run;
+  }
 
   /** 任务分派：返回从日志派生出来的任务视图（不自己维护第二份状态）。 */
   async dispatch(input: DispatchInput): Promise<TaskView> {
@@ -144,10 +177,30 @@ export class DelegationRunner {
 
   private async execute(input: DispatchInput, childId: string): Promise<TaskView> {
     const { select, locks, logger } = this.deps;
-    const candidates = await select.resolveCandidates(input.agentId);
+    const sandbox = this.deps.sandboxes?.get(input.agentId);
+    const requireProcessSandbox = sandbox !== undefined && hasActiveProcessSandboxOverrides(sandbox);
+    const candidates = await select.resolveCandidates(input.agentId, { requireProcessSandbox });
     let resolved = candidates[0]!;
 
-    if (input.mode === "write") {
+    const useWorktree =
+      input.mode === "write" &&
+      sandbox?.workspace.isolation === "worktree" &&
+      this.deps.worktreesDir !== undefined;
+    let worktreeMeta: WorktreeMeta | null = null;
+    let effectiveWorkspace = input.workspacePath;
+
+    if (useWorktree) {
+      const created = await createTaskWorktree({
+        worktreesDir: this.deps.worktreesDir!,
+        workspaceId: input.workspaceId,
+        sessionId: input.session.sessionId,
+        taskId: childId,
+        workspaceRoot: input.workspacePath,
+      });
+      if (!created.ok) fail("unsupported", created.error);
+      worktreeMeta = created.value;
+      effectiveWorkspace = worktreeMeta.worktreePath;
+    } else if (input.mode === "write") {
       const acquired = locks.acquire(input.workspaceId, childId);
       if (!acquired.ok) fail("busy", acquired.error);
       try {
@@ -161,7 +214,7 @@ export class DelegationRunner {
       }
     }
 
-    // 这条 append 已经在写锁之内：写盘失败要先把锁放掉再抛，否则这个工作区
+    // 这条 append 已经在写锁之内：写盘失败要先把锁或 worktree 放掉再抛，否则这个工作区
     // 在本次运行里再也派不出写入型任务（锁只在内存里，重启才恢复）。
     try {
       input.session.append("delegation/spawn", {
@@ -176,8 +229,15 @@ export class DelegationRunner {
       input.session.append("delegation/progress", { childId, event: { type: "trace", summary: `task-type:${input.taskType}` } });
       if (input.model !== undefined) input.session.append("delegation/progress", { childId, event: { type: "trace", summary: `model:${input.model}` } });
       if (input.modelConfig !== undefined) input.session.append("delegation/progress", { childId, event: { type: "trace", summary: `model-name:${input.modelConfig.model}` } });
+      if (worktreeMeta !== null) {
+        input.session.append("delegation/progress", { childId, event: { type: "trace", summary: `worktree:active:${worktreeMeta.branch}` } });
+      }
     } catch (error) {
-      if (input.mode === "write") locks.release(input.workspaceId, childId);
+      if (worktreeMeta !== null && this.deps.worktreesDir !== undefined) {
+        await removeTaskWorktree(this.deps.worktreesDir, worktreeMeta, "discarded").catch(() => undefined);
+      } else if (input.mode === "write") {
+        locks.release(input.workspaceId, childId);
+      }
       // 日志写失败本身就是带下一步的 RpcFailure，原样抛；别的错误补上下文。
       if (isRpcFailure(error)) throw error;
       fail(
@@ -196,6 +256,7 @@ export class DelegationRunner {
     // 几千行一条答案，派生时还要逐条拼字符串（O(n²)）。80ms 对界面来说已经是连续的了。
     let pendingOutput = "";
     let flushTimer: NodeJS.Timeout | null = null;
+    let executionSettled = false;
     const flushOutput = (): void => {
       if (flushTimer !== null) {
         clearTimeout(flushTimer);
@@ -225,22 +286,32 @@ export class DelegationRunner {
       this.recordEvent(input.session, childId, event);
     };
 
+    let compiledEnv: CompiledSandboxEnv | null = null;
     let result: DelegationResult;
     let wasSubmitted = false;
     try {
+      if (this.deps.sandboxes !== undefined && this.deps.networkProxy !== undefined) {
+        compiledEnv = await this.deps.sandboxes.compileEnv(input.agentId, {
+          proxy: this.deps.networkProxy,
+          onBlocked: (host) => {
+            if (!executionSettled) record({ type: "trace", summary: `net:blocked:${host}` });
+          },
+        });
+      }
       let attempt = 0;
       while (true) {
         let submitted = false;
         result = await resolved.provider.delegate({
           childId,
           agentId: input.agentId,
-          workspace: input.workspacePath,
+          workspace: effectiveWorkspace,
           goal: input.goal,
           instruction: input.instruction,
           mode: input.mode,
           taskType: input.taskType,
           ...(input.model === undefined ? {} : { model: input.model }),
           ...(input.modelConfig === undefined ? {} : { modelConfig: input.modelConfig }),
+          ...(compiledEnv === null ? {} : { env: compiledEnv.env }),
           ...(input.resumeSessionId === undefined ? {} : { resumeSessionId: input.resumeSessionId }),
           signal: controller.signal,
           onEvent: (event) => {
@@ -261,11 +332,17 @@ export class DelegationRunner {
         ? { status: "unknown", observed: messageOf(error).slice(0, 200), since: new Date().toISOString() }
         : classifyThrow(error, controller.signal);
     } finally {
+      executionSettled = true;
       input.signal.removeEventListener("abort", onOuterAbort);
       this.inflight.delete(childId);
-      if (input.mode === "write") locks.release(input.workspaceId, childId);
-      // 收尾时把剩下的输出写完，再让 `delegation/result` 落盘。
+      compiledEnv?.dispose();
+      if (!useWorktree && input.mode === "write") locks.release(input.workspaceId, childId);
+      // 收尾时把剩下的输出写完，再结算 worktree 与 `delegation/result`。
       flushOutput();
+    }
+
+    if (worktreeMeta !== null && this.deps.worktreesDir !== undefined) {
+      result = await this.settleWorktree(input, childId, worktreeMeta, result);
     }
 
     input.session.append("delegation/result", { childId, result });
@@ -289,9 +366,93 @@ export class DelegationRunner {
       if (state === "queued" || state === "submitted" || state === "received" || state === "returned") {
         session.append("delegation/delivery", { childId, state });
       }
+    } else if (
+      event.type === "trace" &&
+      (event.summary.startsWith("worktree:") || event.summary.startsWith("net:blocked:"))
+    ) {
+      session.append("delegation/progress", { childId, event });
     } else if (event.type === "output" || event.type === "session") {
       session.append("delegation/progress", { childId, event });
     }
+  }
+
+  private async settleWorktree(
+    input: DispatchInput,
+    childId: string,
+    meta: WorktreeMeta,
+    result: DelegationResult,
+  ): Promise<DelegationResult> {
+    const worktreesDir = this.deps.worktreesDir!;
+    if (result.status !== "ok") {
+      const committed = await commitWorktreeChanges(meta);
+      if (!committed.ok) {
+        writeWorktreeMeta(worktreesDir, { ...meta, state: "kept", files: [...(meta.files ?? [])], message: committed.error });
+        this.recordEvent(input.session, childId, { type: "trace", summary: `worktree:kept:${committed.error}` });
+      } else if (!committed.value.hasChanges) {
+        await removeTaskWorktree(worktreesDir, meta, "discarded").catch(() => undefined);
+        this.recordEvent(input.session, childId, { type: "trace", summary: "worktree:discarded" });
+      } else {
+        const msg = `任务结束状态为 ${result.status}，已保留 ${committed.value.files.length} 个文件的隔离改动供核查（分支 ${meta.branch}）`;
+        writeWorktreeMeta(worktreesDir, { ...meta, state: "kept", files: committed.value.files, message: msg });
+        this.recordEvent(input.session, childId, { type: "trace", summary: `worktree:kept:${msg}` });
+      }
+      return result;
+    }
+
+    return this.withMergeLock(input.workspaceId, async () => {
+      if (this.deps.locks.isWriteLocked(input.workspaceId)) {
+        const committed = await commitWorktreeChanges(meta);
+        const files = committed.ok ? committed.value.files : [...(meta.files ?? [])];
+        const msg = committed.ok
+          ? "主工作区当前有共享写任务正在运行，已保留隔离改动供稍后手动合入。"
+          : committed.error;
+        writeWorktreeMeta(worktreesDir, { ...meta, state: "conflict", files, message: msg });
+        this.recordEvent(input.session, childId, { type: "trace", summary: `worktree:conflict:${msg}` });
+        return {
+          ...result,
+          answer: `${result.answer}\n\n[Worktree 提示] ${msg}`,
+        };
+      }
+      const mergeLockId = `merge:${childId}`;
+      const acquired = this.deps.locks.acquire(input.workspaceId, mergeLockId);
+      if (!acquired.ok) {
+        const committed = await commitWorktreeChanges(meta);
+        const files = committed.ok ? committed.value.files : [...(meta.files ?? [])];
+        writeWorktreeMeta(worktreesDir, { ...meta, state: "conflict", files, message: acquired.error });
+        this.recordEvent(input.session, childId, { type: "trace", summary: `worktree:conflict:${acquired.error}` });
+        return {
+          ...result,
+          answer: `${result.answer}\n\n[Worktree 提示] ${acquired.error}`,
+        };
+      }
+      try {
+        try {
+          this.takeSnapshot(input, childId);
+          await this.saveGitBaseline(input, childId);
+        } catch (error) {
+          this.deps.logger.warn({ childId, error: messageOf(error) }, "合入 Worktree 前记录主工作区快照失败");
+        }
+        const outcome = await applyTaskWorktree(worktreesDir, meta, { removeOnSuccess: true });
+        if (outcome.applied) {
+          this.recordEvent(input.session, childId, {
+            type: "trace",
+            summary: `worktree:merged:${JSON.stringify(outcome.files)}`,
+          });
+          return result;
+        }
+        const prefix = outcome.conflict ? "worktree:conflict:" : "worktree:kept:";
+        this.recordEvent(input.session, childId, {
+          type: "trace",
+          summary: `${prefix}${outcome.message}`,
+        });
+        return {
+          ...result,
+          answer: `${result.answer}\n\n[Worktree 冲突提示] ${outcome.message}`,
+        };
+      } finally {
+        this.deps.locks.release(input.workspaceId, mergeLockId);
+      }
+    });
   }
 
   private takeSnapshot(input: DispatchInput, childId: string): void {

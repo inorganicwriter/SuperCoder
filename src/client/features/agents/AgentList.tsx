@@ -3,6 +3,7 @@ import type { ProviderModel, ProviderStatus } from "../../../shared/domain/provi
 import { t } from "../../locale/index.js";
 import { useClientState, useStore } from "../../render/SessionProvider.js";
 import { Select } from "../../render/Select.js";
+import { AgentSandboxEditor } from "./AgentSandboxEditor.js";
 import { buildModelOptions } from "./model-options.js";
 import styles from "./agents.module.css";
 
@@ -71,6 +72,10 @@ function AgentRow({ agent }: { agent: ProviderStatus }): JSX.Element {
       <summary className={styles.cardHead}>
         <span className={hasInterface ? styles.dotReady : historyOnly ? styles.dotPartial : styles.dotOff} aria-hidden="true" />
         <strong className={styles.name}>{agent.label}</strong>
+        {agent.sandbox?.network.mode === "proxy" ? <span className={styles.via}>{t("agent.badgeProxy")}</span> : null}
+        {agent.sandbox?.network.mode === "direct" ? <span className={styles.via}>{t("agent.badgeDirect")}</span> : null}
+        {agent.sandbox?.network.mode === "offline" ? <span className={styles.via}>{t("agent.badgeOffline")}</span> : null}
+        {agent.sandbox?.workspace.isolation === "worktree" ? <span className={styles.via}>{t("agent.badgeWorktree")}</span> : null}
         {agent.level !== null && !historyOnly ? <span className={styles.via}>{t(VIA[agent.level])}</span> : null}
         <span className={hasInterface ? styles.statusReady : styles.statusMuted}>
           {historyOnly ? t("agent.historyOnly") : hasInterface ? t("agent.installed") : t("agent.missing")}
@@ -80,6 +85,7 @@ function AgentRow({ agent }: { agent: ProviderStatus }): JSX.Element {
       <div className={styles.content}>
       {agent.reason ? <p className={styles.hint}>{agent.reason}</p> : null}
       {hasInterface ? (
+        <>
         <div className={styles.fields}>
           {/* 每个 Agent 都是同样两列；不能由这里设置权限的，如实显示"随任务模式"。 */}
           <div className={styles.field}>
@@ -119,6 +125,8 @@ function AgentRow({ agent }: { agent: ProviderStatus }): JSX.Element {
             />
           </div>
         </div>
+        <AgentSandboxEditor agent={agent} />
+        </>
       ) : null}
       {hasInterface && !canLoad ? <p className={styles.hint}>{t("agent.modelNeedsWorkspace")}</p> : null}
       {models?.length === 0 ? <p className={styles.hint}>{t("agent.modelNone")}</p> : null}

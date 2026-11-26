@@ -24,6 +24,7 @@ export interface FamilyOptions {
   readonly homeDir: string;
   readonly configFile?: string;
   readonly allowPermissions?: (agentId: string) => boolean;
+  readonly compileEnv?: (agentId: string) => Promise<{ readonly env: NodeJS.ProcessEnv; readonly dispose: () => void }>;
   /** 测试注入：替代注册表查询。 */
   readonly findInstalled?: (displayName: string, exeName: string) => string | null;
 }
@@ -31,7 +32,13 @@ export interface FamilyOptions {
 export const CustomAgentsSchema = z.object({ agents: z.array(CustomAgentSchema.passthrough()).default([]) }).passthrough();
 
 export function createProviderFamilies(options: FamilyOptions): FamilySpec[] {
-  const acp = (deps: AcpDeps): AcpProvider => new AcpProvider({ ...deps, allowPermissions: () => options.allowPermissions?.(deps.providerId ?? "acp") === true });
+  const compileFor = (id: string) => (options.compileEnv ? { compileEnv: () => options.compileEnv!(id) } : {});
+  const acp = (deps: AcpDeps): AcpProvider =>
+    new AcpProvider({
+      ...deps,
+      ...compileFor(deps.providerId ?? "acp"),
+      allowPermissions: () => options.allowPermissions?.(deps.providerId ?? "acp") === true,
+    });
   const findInstalled = options.findInstalled ?? findInstalledExe;
   // 安装目录可自选：先看卸载信息里登记的真实位置，再退回默认安装目录。不写死某台机器的路径。
   const registered = findInstalled("DeepSeek Harness", "DeepSeek Harness.exe");
@@ -79,7 +86,7 @@ export function createProviderFamilies(options: FamilyOptions): FamilySpec[] {
       id: "codex",
       label: "Codex",
       entries: [
-        { level: 1, provider: new CodexAppServerProvider({ allowPermissions: () => options.allowPermissions?.("codex") === true }) },
+        { level: 1, provider: new CodexAppServerProvider({ ...compileFor("codex"), allowPermissions: () => options.allowPermissions?.("codex") === true }) },
         { level: 2, provider: new CliJsonProvider() },
       ],
       probe: codexProbe,

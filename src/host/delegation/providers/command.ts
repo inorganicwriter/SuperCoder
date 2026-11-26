@@ -7,6 +7,7 @@ import { diagnostic } from "./codex-appserver.js";
 /** A user-configured noninteractive command. Prompt is sent on stdin; stdout is the answer. */
 export class CommandProvider implements DelegationProvider {
   readonly capabilities: ProviderCapabilities = { readOnly: false, resume: false, effort: false, streaming: false, receiptStates: ["queued", "submitted", "returned"], fragility: "documented" };
+  readonly supportsSandbox = { env: true, network: true, worktree: true } as const;
   constructor(readonly id: string, private readonly binary: string, private readonly args: readonly string[]) {}
   async detect(): Promise<ProviderInstallation> {
     const binaryPath = await whichBinary(this.binary, process.cwd());
@@ -26,6 +27,7 @@ export class CommandProvider implements DelegationProvider {
     const result = await runProcess(this.binary, this.args, {
       cwd: request.workspace,
       input: buildDelegationPrompt(request),
+      ...(request.env === undefined ? {} : { env: request.env as NodeJS.ProcessEnv }),
       idleTimeoutMs: 30 * 60 * 1000,
       onStdout: () => request.onEvent({ type: "trace", summary: "heartbeat" }),
       signal: request.signal,

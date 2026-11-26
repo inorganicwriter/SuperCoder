@@ -54,6 +54,7 @@ const DEFAULT_TIMEOUT_MS = 30 * 60 * 1000;
 export class CliJsonProvider implements DelegationProvider {
   readonly id: string;
   readonly capabilities = CLI_JSON_CAPABILITIES;
+  readonly supportsSandbox = { env: true, network: true, worktree: true } as const;
 
   constructor(private readonly deps: CliJsonDeps = {}) {
     this.id = CLI_JSON_ID;
@@ -101,6 +102,7 @@ export class CliJsonProvider implements DelegationProvider {
           : await runProcess(this.deps.binary ?? codexBinary(), args, {
               cwd: request.workspace,
               input: stdin,
+              ...(request.env === undefined ? {} : { env: request.env as NodeJS.ProcessEnv }),
               ...(this.deps.timeoutMs !== undefined
                 ? { timeoutMs: this.deps.timeoutMs }
                 : { idleTimeoutMs: DEFAULT_TIMEOUT_MS }),

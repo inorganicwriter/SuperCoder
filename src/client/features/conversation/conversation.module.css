@@ -383,6 +383,37 @@
   font-size: 12.5px;
 }
 
+.worktreeBadge,
+.worktreeWarn {
+  padding: 1px 7px;
+  border-radius: 999px;
+  font-size: 11px;
+  line-height: 17px;
+  white-space: nowrap;
+}
+
+.worktreeBadge {
+  background: var(--sc-bg-sunken);
+  color: var(--sc-text-dim);
+}
+
+.worktreeWarn {
+  background: color-mix(in srgb, var(--sc-warn) 18%, transparent);
+  color: var(--sc-warn);
+}
+
+.taskWorktreeMsg {
+  margin: 0;
+  color: var(--sc-text-dim);
+  font-size: 12px;
+}
+
+.worktreeActions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
 /* —— 工具调用：连续的合并成一行，展开看明细 —— */
 .toolGroup {
   margin: 2px 0;

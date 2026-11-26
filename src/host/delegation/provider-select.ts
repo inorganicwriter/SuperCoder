@@ -16,6 +16,7 @@ import type {
   ProviderStatus,
   StoreProbe,
 } from "../../shared/domain/provider.js";
+import type { SandboxCapabilities } from "../../shared/domain/sandbox.js";
 import type { DelegationEvent } from "../../shared/domain/delegation.js";
 import { fail } from "../boot/failure.js";
 
@@ -168,12 +169,15 @@ export class ProviderSelect {
   }
 
   /** 任务分派必须落在 1–3 级；只有第 4 级时明确拒绝。 */
-  async resolve(agentId: string): Promise<ResolvedProvider> {
-    return (await this.resolveCandidates(agentId))[0]!;
+  async resolve(agentId: string, options?: { readonly requireProcessSandbox?: boolean }): Promise<ResolvedProvider> {
+    return (await this.resolveCandidates(agentId, options))[0]!;
   }
 
   /** Candidates are only alternatives until a provider actually submits a task. */
-  async resolveCandidates(agentId: string): Promise<ResolvedProvider[]> {
+  async resolveCandidates(
+    agentId: string,
+    options?: { readonly requireProcessSandbox?: boolean },
+  ): Promise<ResolvedProvider[]> {
     await this.ensurePrepared(false);
     const family = this.family(agentId);
     const available: ResolvedProvider[] = [];
@@ -181,7 +185,21 @@ export class ProviderSelect {
       const installation = await entry.provider.detect().catch(() => ({ installed: false }));
       if (installation.installed) available.push({ provider: entry.provider, level: entry.level });
     }
-    if (available.length > 0) return available;
+    if (available.length > 0) {
+      if (options?.requireProcessSandbox === true) {
+        const filtered = available.filter(
+          (candidate) =>
+            candidate.provider.supportsSandbox?.network !== false &&
+            candidate.provider.supportsSandbox?.env !== false,
+        );
+        if (filtered.length > 0) return filtered;
+        fail(
+          "unsupported",
+          `${family.label} 当前仅检测到桌面常驻服务，无法应用独立网络或环境变量沙箱。请将网络与环境恢复为默认，或安装对应 CLI/ACP 入口。`,
+        );
+      }
+      return available;
+    }
     const root = await family.probe.locate("").catch(() => null);
     if (root !== null) {
       fail(
@@ -190,6 +208,29 @@ export class ProviderSelect {
       );
     }
     fail("not_found", `${family.label} 未安装或未登录，请安装后重新探测。`);
+  }
+
+  sandboxCapabilitiesOf(agentId: string): SandboxCapabilities {
+    const family = this.family(agentId);
+    const hasProcess = family.entries.some(
+      (entry) =>
+        entry.provider.supportsSandbox?.network !== false &&
+        entry.provider.supportsSandbox?.env !== false,
+    );
+    const hasDesktopOnly =
+      !hasProcess &&
+      family.entries.some((entry) => entry.provider.supportsSandbox?.network === false);
+    const hasWorktree = family.entries.some(
+      (entry) => entry.provider.supportsSandbox?.worktree !== false,
+    );
+    return {
+      env: hasProcess,
+      network: hasProcess,
+      worktree: hasWorktree,
+      ...(hasDesktopOnly
+        ? { note: `${family.label} 仅支持通过本地桌面服务接入，暂不支持独立网络路由或环境变量覆盖。` }
+        : {}),
+    };
   }
 
   family(id: string): FamilySpec {

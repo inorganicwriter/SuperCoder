@@ -98,6 +98,8 @@ export interface DelegationRequest {
   readonly model?: string;
   /** Runtime-only provider credentials; never serialize into events or diagnostics. */
   readonly modelConfig?: AgentModelConfig;
+  /** Runtime-only compiled sandbox environment variables; never serialize into events or logs. */
+  readonly env?: Record<string, string | undefined>;
   readonly effort?: string;
   readonly resumeSessionId?: string;
   readonly signal: AbortSignal;

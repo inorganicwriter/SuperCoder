@@ -13,6 +13,7 @@ import type { McpServer } from "../../shared/domain/mcp.js";
 import type { ModelProfile, ModelProfileView } from "../../shared/domain/model.js";
 import type { ProviderStatus } from "../../shared/domain/provider.js";
 import type { ProviderModel } from "../../shared/domain/provider.js";
+import type { AgentSandboxProfile, SandboxTestResult } from "../../shared/domain/sandbox.js";
 import type { TaskView } from "../../shared/domain/task.js";
 import type { Workspace } from "../../shared/domain/workspace.js";
 import type { MethodName, MethodParams, MethodResult } from "../../shared/protocol/methods.js";
@@ -497,6 +498,79 @@ export class ClientStore {
   async listAgentModels(agentId: string): Promise<ProviderModel[] | null> {
     try { return await this.connection.rpc("agent.models", { agentId, workspaceId: this.state.activeWorkspaceId }); }
     catch (error) { this.fail(error); return null; }
+  }
+
+  async setAgentSandbox(
+    agentId: string,
+    sandbox: AgentSandboxProfile,
+    secretValues?: Record<string, string>,
+  ): Promise<boolean> {
+    this.clearError();
+    try {
+      await this.connection.rpc("agent.sandbox.set", {
+        agentId,
+        sandbox,
+        ...(secretValues === undefined || Object.keys(secretValues).length === 0
+          ? {}
+          : { secretValues }),
+      });
+      this.patch({ agents: await this.connection.rpc("agent.list", {}) });
+      return true;
+    } catch (error) {
+      this.fail(error);
+      return false;
+    }
+  }
+
+  async testAgentSandbox(
+    agentId: string,
+    targetUrl: string,
+    sandbox?: AgentSandboxProfile,
+  ): Promise<SandboxTestResult | null> {
+    try {
+      return await this.connection.rpc("agent.sandbox.test", {
+        agentId,
+        targetUrl,
+        ...(sandbox === undefined ? {} : { sandbox }),
+      });
+    } catch (error) {
+      this.fail(error);
+      return null;
+    }
+  }
+
+  async diffTaskWorktree(taskId: string): Promise<MethodResult<"task.worktree.diff"> | null> {
+    const sessionId = this.state.activeSessionId;
+    if (sessionId === null) return null;
+    try {
+      return await this.connection.rpc("task.worktree.diff", { sessionId, taskId });
+    } catch (error) {
+      this.fail(error);
+      return null;
+    }
+  }
+
+  async applyTaskWorktree(taskId: string): Promise<MethodResult<"task.worktree.apply"> | null> {
+    const sessionId = this.state.activeSessionId;
+    if (sessionId === null) return null;
+    try {
+      return await this.connection.rpc("task.worktree.apply", { sessionId, taskId });
+    } catch (error) {
+      this.fail(error);
+      return null;
+    }
+  }
+
+  async discardTaskWorktree(taskId: string): Promise<boolean> {
+    const sessionId = this.state.activeSessionId;
+    if (sessionId === null) return false;
+    try {
+      await this.connection.rpc("task.worktree.discard", { sessionId, taskId });
+      return true;
+    } catch (error) {
+      this.fail(error);
+      return false;
+    }
   }
 
   async retryTask(taskId: string, confirmSideEffects: boolean): Promise<void> {

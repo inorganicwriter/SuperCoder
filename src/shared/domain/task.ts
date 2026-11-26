@@ -8,6 +8,7 @@
 import { z } from "zod";
 import { DelegationResultSchema } from "./delegation.js";
 import { ReceiptStateSchema } from "./provider.js";
+import { TaskWorktreeInfoSchema } from "./sandbox.js";
 
 export const TaskStateSchema = z.enum([
   "spawned",
@@ -44,6 +45,8 @@ export const TaskViewSchema = z.object({
   selectedModel: z.string().optional(),
   selectedModelName: z.string().optional(),
   output: z.string().optional(),
+  worktree: TaskWorktreeInfoSchema.optional(),
+  blockedHosts: z.array(z.string()).optional(),
   /** 任务分派（spawn）事件的序号，用来把任务卡片排进对话流。 */
   seq: z.number().int().positive().optional(),
   /** 人工重试次数。`unknown` 态下重试也必须由用户确认后发起。 */

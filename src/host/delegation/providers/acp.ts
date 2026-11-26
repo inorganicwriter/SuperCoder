@@ -52,6 +52,7 @@ export interface AcpDeps {
   readonly env?: Readonly<Record<string, string>>;
   readonly capabilities?: ProviderCapabilities;
   readonly allowPermissions?: () => boolean;
+  readonly compileEnv?: () => Promise<{ readonly env: NodeJS.ProcessEnv; readonly dispose: () => void }>;
   readonly createTransport?: (workspace: string) => JsonRpcTransport;
   readonly detect?: () => Promise<ProviderInstallation>;
   readonly promptTimeoutMs?: number;
@@ -64,6 +65,7 @@ const DEFAULT_TIMEOUT_MS = 30 * 60 * 1000;
 export class AcpProvider implements DelegationProvider {
   readonly id: string;
   readonly capabilities: ProviderCapabilities;
+  readonly supportsSandbox = { env: true, network: true, worktree: true } as const;
   private readonly binary: string;
   private readonly extraArgs: readonly string[];
 
@@ -82,12 +84,16 @@ export class AcpProvider implements DelegationProvider {
       : { installed: true, binaryPath };
   }
 
-  private transport(workspace: string, modelConfig?: AgentModelConfig): JsonRpcTransport {
-    const extra: Record<string, string> = { ...this.deps.env };
+  private transport(
+    workspace: string,
+    modelConfig?: AgentModelConfig,
+    runtimeEnv?: Record<string, string | undefined>,
+  ): JsonRpcTransport {
+    const modelOverrides: Record<string, string> = {};
     let args = this.extraArgs;
     let patchDir: string | undefined;
     if (modelConfig) {
-      extra["SUPERCODER_AGENT_API_KEY"] = modelConfig.apiKey;
+      modelOverrides["SUPERCODER_AGENT_API_KEY"] = modelConfig.apiKey;
       if (this.id === "deepseek-harness" && !this.deps.createTransport) {
         patchDir = mkdtempSync(join(tmpdir(), "supercoder-dsh-"));
         const patchFile = join(patchDir, "profile.json");
@@ -98,12 +104,26 @@ export class AcpProvider implements DelegationProvider {
           ]), { mode: 0o600 });
         } catch (error) { rmSync(patchDir, { recursive: true, force: true }); throw error; }
         args = [...this.extraArgs.slice(0, -1), "--profile", "acp", "--patch", patchFile];
-      } else if (this.id === "opencode") extra["OPENCODE_CONFIG_CONTENT"] = JSON.stringify({
+      } else if (this.id === "opencode") modelOverrides["OPENCODE_CONFIG_CONTENT"] = JSON.stringify({
         provider: { supercoder: { name: "SuperCoder", npm: "@ai-sdk/openai-compatible", options: { baseURL: modelConfig.baseUrl, apiKey: "{env:SUPERCODER_AGENT_API_KEY}" }, models: { [modelConfig.model]: { name: modelConfig.model, tool_call: true } } } },
       });
     }
+    // `runtimeEnv` 里的用户沙箱环境变量应覆盖 `this.deps.env` 的默认兜底（例如用户自定义 `DSH_HOME`），
+    // 同时保留 `ELECTRON_RUN_AS_NODE` 等启动关键标志及 `modelConfig` 凭据。
+    const mandatoryDefaults: Record<string, string> = {
+      ...(this.deps.env?.["ELECTRON_RUN_AS_NODE"] === undefined
+        ? {}
+        : { ELECTRON_RUN_AS_NODE: this.deps.env["ELECTRON_RUN_AS_NODE"] }),
+      ...modelOverrides,
+    };
+    const envOption =
+      runtimeEnv !== undefined
+        ? { env: { ...this.deps.env, ...runtimeEnv, ...mandatoryDefaults } as NodeJS.ProcessEnv }
+        : modelConfig || this.deps.env
+          ? { env: sanitizedEnv({ ...this.deps.env, ...modelOverrides }) }
+          : {};
     try {
-      const transport = this.deps.createTransport?.(workspace) ?? createStdioTransport(spawnChild(this.binary, args, { cwd: workspace || process.cwd(), ...(modelConfig || this.deps.env ? { env: sanitizedEnv(extra) } : {}) }), { allowPermissions: this.deps.allowPermissions ?? (() => false) });
+      const transport = this.deps.createTransport?.(workspace) ?? createStdioTransport(spawnChild(this.binary, args, { cwd: workspace || process.cwd(), ...envOption }), { allowPermissions: this.deps.allowPermissions ?? (() => false) });
       if (!patchDir) return transport;
       const dir = patchDir;
       return { ...transport, close: () => { try { transport.close(); } finally { rmSync(dir, { recursive: true, force: true }); } } };
@@ -120,7 +140,8 @@ export class AcpProvider implements DelegationProvider {
   }
 
   async listModels(workspace: string): Promise<ProviderModel[]> {
-    const transport = this.transport(workspace);
+    const compiled = this.deps.createTransport === undefined && this.deps.compileEnv ? await this.deps.compileEnv() : undefined;
+    const transport = this.transport(workspace, undefined, compiled?.env);
     try {
       await this.initialize(transport);
       const session = asRecord(await transport.request("session/new", { cwd: workspace, mcpServers: [] }));
@@ -148,7 +169,10 @@ export class AcpProvider implements DelegationProvider {
         const provider = providerOf(m["modelId"]) ?? vendorOf(typeof m["name"] === "string" ? m["name"] : m["modelId"]);
         return [{ id: m["modelId"], label: typeof m["name"] === "string" ? m["name"] : m["modelId"], current: m["modelId"] === legacy["currentModelId"], ...(provider === undefined ? {} : { provider }) }];
       });
-    } finally { transport.close(); }
+    } finally {
+      transport.close();
+      compiled?.dispose();
+    }
   }
 
   /**
@@ -174,16 +198,21 @@ export class AcpProvider implements DelegationProvider {
   }
 
   async listSessions(workspace: string, page: ProviderPage): Promise<ProviderSessionSummary[]> {
-    const transport = this.transport(workspace);
+    const compiled = this.deps.createTransport === undefined && this.deps.compileEnv ? await this.deps.compileEnv() : undefined;
+    const transport = this.transport(workspace, undefined, compiled?.env);
     try {
       const capabilities = await this.initialize(transport);
       if (asRecord(capabilities["sessionCapabilities"])["list"] === undefined) return [];
       return (await this.sessions(transport, workspace, page.offset + page.limit)).slice(page.offset, page.offset + page.limit);
-    } finally { transport.close(); }
+    } finally {
+      transport.close();
+      compiled?.dispose();
+    }
   }
 
   async readSession(sessionId: string, page: ProviderPage): Promise<DelegationEvent[]> {
-    const transport = this.transport(process.cwd());
+    const compiled = this.deps.createTransport === undefined && this.deps.compileEnv ? await this.deps.compileEnv() : undefined;
+    const transport = this.transport(process.cwd(), undefined, compiled?.env);
     try {
       const capabilities = await this.initialize(transport);
       const sessionCapabilities = asRecord(capabilities["sessionCapabilities"]);
@@ -203,14 +232,17 @@ export class AcpProvider implements DelegationProvider {
       });
       try { await transport.request("session/load", { sessionId, cwd: match.cwd, mcpServers: [] }); } finally { off(); }
       return events.slice(page.offset, page.offset + page.limit);
-    } finally { transport.close(); }
+    } finally {
+      transport.close();
+      compiled?.dispose();
+    }
   }
 
   async delegate(request: DelegationRequest): Promise<DelegationResult> {
     const startedAt = Date.now();
     if (request.modelConfig && this.id !== "opencode" && this.id !== "deepseek-harness") return { status: "failed", diagnostic: diagnostic("handshake", "protocol", "此 ACP Agent 不支持注入 SuperCoder 模型档案"), durationMs: 0 };
     // 只读请求照常执行：可写权限本就更高，ACP 没有可强制的只读沙箱，不因此拒绝任务。
-    const transport = this.transport(request.workspace, request.modelConfig);
+    const transport = this.transport(request.workspace, request.modelConfig, request.env);
     const candidates: AnswerCandidate[] = [];
     // ACP 的 chunk 是增量：拼成一条完整答案再交给  选择，否则只取到第一段。
     let answerBuffer = "";

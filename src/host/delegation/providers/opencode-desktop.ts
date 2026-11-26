@@ -25,6 +25,7 @@ export function desktopEndpoints(homeDir: string): string[] {
 export class OpenCodeDesktopProvider implements DelegationProvider {
   readonly id = "opencode-desktop";
   readonly capabilities = caps;
+  readonly supportsSandbox = { env: false, network: false, worktree: true } as const;
   constructor(private readonly deps: Deps) {}
   private get fetcher(): typeof fetch { return this.deps.fetchImpl ?? fetch; }
   private async endpoint(): Promise<string | null> {

@@ -6,7 +6,7 @@
  * `assertFullCoverage` 保证"方法都注册了"，这些用例保证"注册的能真用"。
  */
 
-import { existsSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import { startHost, type RunningHost } from "../../src/host/index.js";
@@ -73,7 +73,7 @@ describe("RPC Callable Surface", () => {
     try {
       const registered = fixture.host.router.methods().sort();
       expect(registered).toEqual(Object.keys(METHODS).sort());
-      expect(registered).toHaveLength(39);
+      expect(registered).toHaveLength(44);
     } finally {
       await fixture.cleanup();
     }
@@ -115,6 +115,97 @@ describe("RPC Callable Surface", () => {
       expect(agents.find((agent) => agent.id === "deepseek-harness")?.permissionPolicy).toBe("deny");
       await fixture.call("agent.permission.set", { agentId: "codex", policy: "allow" });
     } finally { await fixture.cleanup(); }
+  });
+
+  it("persists per-agent sandbox config with encrypted secrets and evaluates network tests", async () => {
+    const fixture = await boot();
+    try {
+      const saved = await fixture.call("agent.sandbox.set", {
+        agentId: "codex",
+        sandbox: {
+          network: {
+            mode: "proxy",
+            proxyUrl: "http://127.0.0.1:7890",
+            noProxy: ["localhost"],
+            allowlist: ["api.openai.com"],
+            denylist: [],
+          },
+          env: {
+            set: { CUSTOM_FLAG: "1", OPENAI_API_KEY: "sk-inline-secret" },
+            secretKeys: [],
+            unset: ["HTTP_PROXY"],
+            prependPath: [],
+            isolatedHome: false,
+          },
+          workspace: { isolation: "worktree" },
+        },
+        secretValues: { CUSTOM_TOKEN: "tok-explicit-secret" },
+      });
+
+      expect(saved.network.mode).toBe("proxy");
+      expect(saved.workspace.isolation).toBe("worktree");
+      expect(saved.env.set).toEqual({ CUSTOM_FLAG: "1" });
+      expect(saved.env.secretKeys).toEqual(["CUSTOM_TOKEN", "OPENAI_API_KEY"]);
+
+      const rawSandboxFile = readFileSync(join(fixture.home, "agent-sandboxes.json"), "utf8");
+      expect(rawSandboxFile).not.toContain("sk-inline-secret");
+      expect(rawSandboxFile).not.toContain("tok-explicit-secret");
+
+      const agents = await fixture.call("agent.list", {});
+      const codex = agents.find((a) => a.id === "codex");
+      expect(codex?.sandbox?.network.mode).toBe("proxy");
+      expect(codex?.sandbox?.workspace.isolation).toBe("worktree");
+      expect(codex?.sandboxCapabilities?.network).toBe(true);
+
+      const blocked = await fixture.call("agent.sandbox.test", {
+        agentId: "codex",
+        targetUrl: "https://blocked.example.com",
+      });
+      expect(blocked.ok).toBe(false);
+      expect(blocked.blockedByRule).toBe(true);
+
+      const offlineBlocked = await fixture.call("agent.sandbox.test", {
+        agentId: "codex",
+        targetUrl: "https://api.openai.com",
+        sandbox: {
+          network: { mode: "offline", noProxy: [], allowlist: [], denylist: [] },
+          env: { set: {}, secretKeys: [], unset: [], prependPath: [], isolatedHome: false },
+          workspace: { isolation: "shared" },
+        },
+      });
+      expect(offlineBlocked.ok).toBe(false);
+      expect(offlineBlocked.blockedByRule).toBe(true);
+
+      const workspace = await fixture.call("workspace.add", { path: fixture.home });
+      const { sessionId } = await fixture.call("session.create", { workspaceId: workspace.id });
+      const { sessionId: otherSessionId } = await fixture.call("session.create", { workspaceId: workspace.id });
+      const wtErr = await fixture.errorOf("task.worktree.diff", { sessionId, taskId: "missing_task" });
+      expect(wtErr.code).toBe("not_found");
+
+      const wtDir = join(fixture.home, "worktrees", workspace.id);
+      mkdirSync(wtDir, { recursive: true });
+      writeFileSync(
+        join(wtDir, "t_done.meta.json"),
+        JSON.stringify({
+          taskId: "t_done",
+          sessionId,
+          workspaceId: workspace.id,
+          workspaceRoot: fixture.home,
+          worktreePath: join(wtDir, "t_done"),
+          branch: "supercoder/task/t_done",
+          baseCommit: "0000000000000000000000000000000000000000",
+          state: "merged",
+          createdAt: new Date().toISOString(),
+        }),
+        "utf8",
+      );
+      const wrongSession = await fixture.errorOf("task.worktree.apply", { sessionId: otherSessionId, taskId: "t_done" });
+      expect(wrongSession.code).toBe("not_found");
+      const alreadyMerged = await fixture.errorOf("task.worktree.apply", { sessionId, taskId: "t_done" });
+      expect(alreadyMerged.code).toBe("denied");
+    } finally {
+      await fixture.cleanup();
+    }
   });
 
   it("model profile lifecycle: upsert, list, test, and remove", async () => {

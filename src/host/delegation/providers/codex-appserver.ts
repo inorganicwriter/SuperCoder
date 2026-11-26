@@ -54,6 +54,7 @@ export interface CodexAppServerDeps {
   readonly detect?: () => Promise<ProviderInstallation>;
   readonly turnTimeoutMs?: number;
   readonly allowPermissions?: () => boolean;
+  readonly compileEnv?: () => Promise<{ readonly env: NodeJS.ProcessEnv; readonly dispose: () => void }>;
 }
 
 const DEFAULT_TURN_TIMEOUT_MS = 30 * 60 * 1000;
@@ -61,6 +62,7 @@ const DEFAULT_TURN_TIMEOUT_MS = 30 * 60 * 1000;
 export class CodexAppServerProvider implements DelegationProvider {
   readonly id = CODEX_APP_SERVER_ID;
   readonly capabilities = CODEX_APP_SERVER_CAPABILITIES;
+  readonly supportsSandbox = { env: true, network: true, worktree: true } as const;
 
   constructor(private readonly deps: CodexAppServerDeps = {}) {}
 
@@ -70,17 +72,22 @@ export class CodexAppServerProvider implements DelegationProvider {
   }
 
   async listModels(workspace: string): Promise<ProviderModel[]> {
-    const transport = this.deps.createTransport?.(workspace) ?? spawnCodexTransport(workspace || process.cwd());
+    const compiled = this.deps.createTransport === undefined && this.deps.compileEnv ? await this.deps.compileEnv() : undefined;
+    const transport = this.deps.createTransport?.(workspace) ?? spawnCodexTransport(workspace || process.cwd(), undefined, undefined, compiled?.env);
     try {
       await initialize(transport);
       const result = asRecord(await transport.request("model/list", { limit: 100, includeHidden: false }));
       if (!Array.isArray(result["data"])) throw new Error("Codex 模型清单格式不符");
       return result["data"].flatMap((value) => { const item = asRecord(value); const id = item["model"] ?? item["id"]; return typeof id === "string" ? [{ id, label: typeof item["displayName"] === "string" ? item["displayName"] : id, current: item["isDefault"] === true, provider: "OpenAI" }] : []; });
-    } finally { transport.close(); }
+    } finally {
+      transport.close();
+      compiled?.dispose();
+    }
   }
 
   async listSessions(workspace: string, page: ProviderPage): Promise<ProviderSessionSummary[]> {
-    const transport = this.deps.createTransport?.(workspace) ?? spawnCodexTransport(workspace || process.cwd());
+    const compiled = this.deps.createTransport === undefined && this.deps.compileEnv ? await this.deps.compileEnv() : undefined;
+    const transport = this.deps.createTransport?.(workspace) ?? spawnCodexTransport(workspace || process.cwd(), undefined, undefined, compiled?.env);
     try {
       await initialize(transport);
       const threads: Array<{ id?: string; name?: string | null; preview?: string; updatedAt?: number }> = [];
@@ -99,11 +106,13 @@ export class CodexAppServerProvider implements DelegationProvider {
       }));
     } finally {
       transport.close();
+      compiled?.dispose();
     }
   }
 
   async readSession(sessionId: string, page: ProviderPage): Promise<DelegationEvent[]> {
-    const transport = this.deps.createTransport?.("") ?? spawnCodexTransport(process.cwd());
+    const compiled = this.deps.createTransport === undefined && this.deps.compileEnv ? await this.deps.compileEnv() : undefined;
+    const transport = this.deps.createTransport?.("") ?? spawnCodexTransport(process.cwd(), undefined, undefined, compiled?.env);
     try {
       await initialize(transport);
       const result = (await transport.request("thread/read", {
@@ -117,13 +126,14 @@ export class CodexAppServerProvider implements DelegationProvider {
       }).slice(page.offset, page.offset + page.limit);
     } finally {
       transport.close();
+      compiled?.dispose();
     }
   }
 
   async delegate(request: DelegationRequest): Promise<DelegationResult> {
     const startedAt = Date.now();
     const transport =
-      this.deps.createTransport?.(request.workspace) ?? spawnCodexTransport(request.workspace, request.modelConfig, this.deps.allowPermissions);
+      this.deps.createTransport?.(request.workspace) ?? spawnCodexTransport(request.workspace, request.modelConfig, this.deps.allowPermissions, request.env);
     const candidates: AnswerCandidate[] = [];
     let phase: DelegationPhase = "handshake";
     let turnSent = false;
@@ -423,10 +433,21 @@ export function classify(message: string): SafeDiagnostic["category"] {
   return "unknown";
 }
 
-export function spawnCodexTransport(workspace: string, modelConfig?: AgentModelConfig, allowPermissions?: () => boolean): JsonRpcTransport {
+export function spawnCodexTransport(
+  workspace: string,
+  modelConfig?: AgentModelConfig,
+  allowPermissions?: () => boolean,
+  runtimeEnv?: Record<string, string | undefined>,
+): JsonRpcTransport {
   const args = ["app-server"];
   if (modelConfig) args.push("-c", 'model_provider="supercoder"', "-c", 'web_search="disabled"', "-c", 'model_providers.supercoder.name="SuperCoder"', "-c", `model_providers.supercoder.base_url=${JSON.stringify(modelConfig.baseUrl)}`, "-c", 'model_providers.supercoder.env_key="SUPERCODER_AGENT_API_KEY"', "-c", 'model_providers.supercoder.wire_api="responses"', "-c", "model_providers.supercoder.requires_openai_auth=false", "-c", "model_providers.supercoder.supports_websockets=false");
-  const child = spawnChild(codexBinary(), args, { cwd: workspace, ...(modelConfig ? { env: sanitizedEnv({ SUPERCODER_AGENT_API_KEY: modelConfig.apiKey }) } : {}) });
+  const envOption =
+    runtimeEnv !== undefined
+      ? { env: { ...runtimeEnv, ...(modelConfig ? { SUPERCODER_AGENT_API_KEY: modelConfig.apiKey } : {}) } as NodeJS.ProcessEnv }
+      : modelConfig
+        ? { env: sanitizedEnv({ SUPERCODER_AGENT_API_KEY: modelConfig.apiKey }) }
+        : {};
+  const child = spawnChild(codexBinary(), args, { cwd: workspace, ...envOption });
   return createStdioTransport(child, { allowPermissions: allowPermissions ?? (() => false) });
 }
 

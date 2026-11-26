@@ -34,9 +34,11 @@ import { ApprovalBroker } from "./tools/approval.js";
 import { ToolPipeline } from "./tools/pipeline.js";
 import { registerBuiltinTools, type BuiltinToolServices } from "./tools/builtin/index.js";
 import { DelegationRunner } from "./delegation/run.js";
+import { AgentNetworkProxy } from "./delegation/network-proxy.js";
 import { ProviderSelect } from "./delegation/provider-select.js";
 import { createProviderFamilies } from "./delegation/registry.js";
 import { AgentPermissionPreferences } from "./delegation/permission-preferences.js";
+import { AgentSandboxPreferences } from "./delegation/sandbox-preferences.js";
 import { AcpProvider } from "./delegation/providers/acp.js";
 import { CodexAppServerProvider } from "./delegation/providers/codex-appserver.js";
 import { AgentModelPreferences } from "./delegation/model-preferences.js";
@@ -48,8 +50,15 @@ import { createMcpToolSource } from "./mcp/bridge.js";
 import { McpRegistry } from "./mcp/registry.js";
 import { WorkspaceRegistry } from "./workspace/entity.js";
 import { WorkspaceLocks } from "./workspace/locks.js";
-import { hasGitCommit, isGitRepo, listUntrackedFiles, restoreFiles } from "./workspace/git.js";
+import { createGitBaseline, hasGitCommit, isGitRepo, listUntrackedFiles, restoreFiles } from "./workspace/git.js";
 import { collectRewindPlan, removeAddedFiles } from "./workspace/rewind.js";
+import { snapshotWorkspace } from "./workspace/snapshot.js";
+import {
+  applyTaskWorktree,
+  diffTaskWorktree,
+  readWorktreeMeta,
+  removeTaskWorktree,
+} from "./workspace/worktree.js";
 
 export interface HostOptions {
   /** 覆盖数据目录（测试与便携模式）。 */
@@ -84,6 +93,8 @@ export async function startHost(options: HostOptions = {}): Promise<RunningHost>
   ensureDir(paths.home);
   ensureDir(paths.sessionsDir);
   ensureDir(paths.diagnosticsDir);
+  ensureDir(paths.worktreesDir);
+  ensureDir(paths.sandboxesDir);
 
   const logger = options.logger ?? createLogger({ bindings: { app: "supercoder" } });
   let lock: LockOutcome | null = null;
@@ -113,13 +124,20 @@ export async function startHost(options: HostOptions = {}): Promise<RunningHost>
   if (scan.rejected.length > 0) logger.warn({ rejected: scan.rejected }, "有会话加载失败");
 
   const locks = new WorkspaceLocks();
+  const networkProxy = new AgentNetworkProxy();
   const agentPermissions = new AgentPermissionPreferences(join(paths.home, "agent-permissions.json"));
+  const agentSandboxes = new AgentSandboxPreferences({
+    file: join(paths.home, "agent-sandboxes.json"),
+    secrets,
+    sandboxesDir: paths.sandboxesDir,
+  });
   const select = new ProviderSelect(
     () =>
       createProviderFamilies({
         homeDir: homedir(),
         configFile: join(paths.home, "agents.json"),
         allowPermissions: (id) => agentPermissions.get(id) === "allow",
+        compileEnv: (id) => agentSandboxes.compileEnv(id, { proxy: networkProxy }),
       }),
     {
       prepare: (force) =>
@@ -138,9 +156,22 @@ export async function startHost(options: HostOptions = {}): Promise<RunningHost>
   const agentStatuses = async (force = false) => (await select.statuses(force)).map((agent) => {
     const selectedModel = agentModels.get(agent.id);
     const supportsPolicy = select.family(agent.id).entries.some((entry) => entry.provider instanceof AcpProvider || entry.provider instanceof CodexAppServerProvider);
-    return { ...agent, ...(selectedModel === undefined ? {} : { selectedModel }), ...(supportsPolicy ? { permissionPolicy: agentPermissions.get(agent.id) } : {}) };
+    return {
+      ...agent,
+      ...(selectedModel === undefined ? {} : { selectedModel }),
+      ...(supportsPolicy ? { permissionPolicy: agentPermissions.get(agent.id) } : {}),
+      sandbox: agentSandboxes.get(agent.id),
+      sandboxCapabilities: select.sandboxCapabilitiesOf(agent.id),
+    };
   });
-  const runner = new DelegationRunner({ select, locks, logger });
+  const runner = new DelegationRunner({
+    select,
+    locks,
+    logger,
+    sandboxes: agentSandboxes,
+    networkProxy,
+    worktreesDir: paths.worktreesDir,
+  });
   const models = new ModelCatalog({
     settings: settingsStore,
     secrets,
@@ -392,6 +423,84 @@ export async function startHost(options: HostOptions = {}): Promise<RunningHost>
       });
     return {};
   });
+  router.register("task.worktree.diff", async (params) => {
+    const session = sessions.get(params.sessionId);
+    const meta = readWorktreeMeta(paths.worktreesDir, session.meta.workspace, params.taskId);
+    if (meta === null || meta.sessionId !== params.sessionId) {
+      fail("not_found", `未找到任务 ${params.taskId} 的隔离工作区记录。`);
+    }
+    const diff = await diffTaskWorktree(paths.worktreesDir, session.meta.workspace, params.taskId);
+    if (!diff.ok) fail("not_found", diff.error);
+    return diff.value;
+  });
+  router.register("task.worktree.apply", async (params) => {
+    const session = sessions.get(params.sessionId);
+    const workspaceId = session.meta.workspace;
+    const meta = readWorktreeMeta(paths.worktreesDir, workspaceId, params.taskId);
+    if (meta === null || meta.sessionId !== params.sessionId) {
+      fail("not_found", `未找到任务 ${params.taskId} 的隔离工作区记录。`);
+    }
+    if (meta.state === "active") {
+      fail("busy", "任务仍在隔离工作区执行中，请等待任务结束后再合入。");
+    }
+    if (meta.state !== "conflict" && meta.state !== "kept") {
+      fail("denied", "该任务的隔离工作区已合入或已丢弃，无需重复操作。");
+    }
+    const root = requireWorkspacePath(workspaceId);
+    return runner.withMergeLock(workspaceId, async () => {
+      const mergeLockId = `manual-merge:${params.taskId}`;
+      const acquired = locks.acquire(workspaceId, mergeLockId);
+      if (!acquired.ok) fail("busy", acquired.error);
+      try {
+        const snapshot = snapshotWorkspace(root);
+        session.append("snapshot/taken", {
+          taskId: params.taskId,
+          files: snapshot.files.map((file) => ({ path: file.path, mtimeMs: file.mtimeMs, size: file.size })),
+        });
+        const gitRef = await createGitBaseline(root);
+        if (gitRef !== null) {
+          const baselineDir = join(dirname(session.logPath), "baselines");
+          ensureDir(baselineDir);
+          writeJsonAtomic(join(baselineDir, `${params.taskId}.json`), { taskId: params.taskId, gitRef });
+        }
+        const outcome = await applyTaskWorktree(paths.worktreesDir, meta, { removeOnSuccess: true });
+        if (outcome.applied) {
+          session.append("delegation/progress", {
+            childId: params.taskId,
+            event: { type: "trace", summary: `worktree:merged:${JSON.stringify(outcome.files)}` },
+          });
+        } else {
+          const prefix = outcome.conflict ? "worktree:conflict:" : "worktree:kept:";
+          session.append("delegation/progress", {
+            childId: params.taskId,
+            event: { type: "trace", summary: `${prefix}${outcome.message}` },
+          });
+        }
+        return { applied: outcome.applied, files: outcome.files, message: outcome.message };
+      } finally {
+        locks.release(workspaceId, mergeLockId);
+      }
+    });
+  });
+  router.register("task.worktree.discard", async (params) => {
+    const session = sessions.get(params.sessionId);
+    const meta = readWorktreeMeta(paths.worktreesDir, session.meta.workspace, params.taskId);
+    if (meta === null || meta.sessionId !== params.sessionId) {
+      fail("not_found", `未找到任务 ${params.taskId} 的隔离工作区记录。`);
+    }
+    if (meta.state === "active") {
+      fail("busy", "任务仍在隔离工作区执行中，无法丢弃。");
+    }
+    if (meta.state === "merged" || meta.state === "discarded") {
+      fail("denied", "该任务的隔离工作区已结束，无需重复丢弃。");
+    }
+    await removeTaskWorktree(paths.worktreesDir, meta, "discarded");
+    session.append("delegation/progress", {
+      childId: params.taskId,
+      event: { type: "trace", summary: "worktree:discarded" },
+    });
+    return {};
+  });
 
   // —— agent ——
   router.register("agent.list", () => agentStatuses(false));
@@ -412,6 +521,21 @@ export async function startHost(options: HostOptions = {}): Promise<RunningHost>
     return {};
   });
   router.register("agent.models", (params) => select.listModels(params.agentId, requireWorkspacePath(params.workspaceId)));
+  router.register("agent.sandbox.set", (params) => {
+    select.family(params.agentId);
+    try {
+      const saved = agentSandboxes.set(params.agentId, params.sandbox, params.secretValues);
+      select.invalidate();
+      return saved;
+    } catch (error) {
+      fail("storage_failed", messageOf(error));
+    }
+  });
+  router.register("agent.sandbox.test", (params) => {
+    select.family(params.agentId);
+    const profile = params.sandbox ?? agentSandboxes.get(params.agentId);
+    return networkProxy.testNetwork(profile, params.targetUrl);
+  });
 
   // —— model ——
   router.register("model.list", () => models.list());
@@ -556,6 +680,7 @@ export async function startHost(options: HostOptions = {}): Promise<RunningHost>
       subscriptions.clear();
       hub.shutdown();
       await mcp.close();
+      await networkProxy.close();
       await channel.close();
       sessions.closeAll();
       if (lock !== null && lock.ok) lock.release();
@@ -566,7 +691,7 @@ export async function startHost(options: HostOptions = {}): Promise<RunningHost>
 /** 方法数量变化时同步检查协议与注册面。 */
 function assertMethodCount(): void {
   const count = Object.keys(METHODS).length;
-  if (count !== 39) throw new Error(`RPC 方法数量应为 39，实际 ${count}`);
+  if (count !== 44) throw new Error(`RPC 方法数量应为 44，实际 ${count}`);
 }
 
 /** 诊断包：脱敏设置 + 会话日志 + 说明；不含任何密钥。 */

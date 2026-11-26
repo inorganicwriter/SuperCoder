@@ -287,6 +287,58 @@ export class SessionDerivation {
         const task = this.tasks.get(event.childId);
         if (task) {
           const progress = event.event;
+          let nextWorktree = task.worktree;
+          let nextBlockedHosts = task.blockedHosts;
+          if (progress.type === "trace") {
+            const summary = progress.summary;
+            if (summary.startsWith("worktree:active:")) {
+              nextWorktree = { state: "active", branch: summary.slice("worktree:active:".length) };
+            } else if (summary.startsWith("worktree:merged:")) {
+              const raw = summary.slice("worktree:merged:".length);
+              let files: string[] = [];
+              if (raw.startsWith("[")) {
+                try {
+                  const parsed = JSON.parse(raw) as unknown;
+                  if (Array.isArray(parsed)) {
+                    files = parsed.filter((item): item is string => typeof item === "string" && item !== "");
+                  }
+                } catch {
+                  files = [];
+                }
+              } else if (raw !== "") {
+                files = raw.split(",").filter((item) => item !== "");
+              }
+              nextWorktree = {
+                state: "merged",
+                ...(task.worktree?.branch === undefined ? {} : { branch: task.worktree.branch }),
+                files,
+              };
+            } else if (summary.startsWith("worktree:conflict:")) {
+              nextWorktree = {
+                state: "conflict",
+                ...(task.worktree?.branch === undefined ? {} : { branch: task.worktree.branch }),
+                ...(task.worktree?.files === undefined ? {} : { files: task.worktree.files }),
+                message: summary.slice("worktree:conflict:".length),
+              };
+            } else if (summary.startsWith("worktree:kept:")) {
+              nextWorktree = {
+                state: "kept",
+                ...(task.worktree?.branch === undefined ? {} : { branch: task.worktree.branch }),
+                ...(task.worktree?.files === undefined ? {} : { files: task.worktree.files }),
+                message: summary.slice("worktree:kept:".length),
+              };
+            } else if (summary === "worktree:discarded") {
+              nextWorktree = {
+                state: "discarded",
+                ...(task.worktree?.branch === undefined ? {} : { branch: task.worktree.branch }),
+              };
+            } else if (summary.startsWith("net:blocked:")) {
+              const host = summary.slice("net:blocked:".length).trim();
+              if (host !== "" && !(task.blockedHosts ?? []).includes(host) && (task.blockedHosts?.length ?? 0) < 50) {
+                nextBlockedHosts = [...(task.blockedHosts ?? []), host];
+              }
+            }
+          }
           this.tasks.set(event.childId, {
             ...task,
             ...(progress.type === "session" ? { nativeSessionId: progress.sessionId } : {}),
@@ -295,6 +347,8 @@ export class SessionDerivation {
             ...(progress.type === "trace" && ["general", "plan", "implement", "review", "fix"].some((type) => progress.summary === `task-type:${type}`) ? { taskType: progress.summary.slice(10) as TaskView["taskType"] } : {}),
             ...(progress.type === "trace" && progress.summary.startsWith("provider:") ? { providerId: progress.summary.slice(9) } : {}),
             ...(progress.type === "output" ? { output: (task.output ?? "") + progress.text } : {}),
+            ...(nextWorktree === undefined ? {} : { worktree: nextWorktree }),
+            ...(nextBlockedHosts === undefined ? {} : { blockedHosts: nextBlockedHosts }),
             updatedAt: event.at,
           });
         }
@@ -330,6 +384,8 @@ export class SessionDerivation {
           ...(task?.selectedModel === undefined ? {} : { selectedModel: task.selectedModel }),
           ...(task?.selectedModelName === undefined ? {} : { selectedModelName: task.selectedModelName }),
           ...(task?.output === undefined ? {} : { output: task.output }),
+          ...(task?.worktree === undefined ? {} : { worktree: task.worktree }),
+          ...(task?.blockedHosts === undefined ? {} : { blockedHosts: task.blockedHosts }),
           retryCount: task?.retryCount ?? 0,
           createdAt: task?.createdAt ?? event.at,
           updatedAt: event.at,

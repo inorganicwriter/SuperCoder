@@ -16,6 +16,10 @@ export interface AppPaths {
   /** 旧数据导入时用的旁路目录。 */
   readonly importedSessionsDir: string;
   readonly diagnosticsDir: string;
+  /** Phase 2 隔离 worktree 的存放根目录。 */
+  readonly worktreesDir: string;
+  /** Per-Agent 独立 HOME/配置沙箱目录。 */
+  readonly sandboxesDir: string;
 }
 
 const APP_DIR_NAME = "SuperCoder";
@@ -35,6 +39,8 @@ export function resolveAppPaths(env: NodeJS.ProcessEnv = process.env): AppPaths 
     sessionsDir: join(home, "sessions"),
     importedSessionsDir: join(home, "sessions.imported"),
     diagnosticsDir: join(home, "diagnostics"),
+    worktreesDir: join(home, "worktrees"),
+    sandboxesDir: join(home, "sandboxes"),
   };
 }
 

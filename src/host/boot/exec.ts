@@ -9,7 +9,7 @@
 
 import { spawn, spawnSync, type ChildProcess, type SpawnOptions } from "node:child_process";
 import { accessSync, constants, existsSync, readdirSync, statSync } from "node:fs";
-import { dirname, isAbsolute, join } from "node:path";
+import { delimiter, dirname, isAbsolute, join } from "node:path";
 import { StringDecoder } from "node:string_decoder";
 
 /** 单个流的输出上限：够放一次验证/JSON 输出，又不至于把内存撑爆。 */
@@ -62,14 +62,68 @@ const ENV_WHITELIST = [
   "CURL_CA_BUNDLE",
 ];
 
-export function sanitizedEnv(extra: Readonly<Record<string, string>> = {}): NodeJS.ProcessEnv {
+export const PROXY_ENV_KEYS = [
+  "HTTP_PROXY",
+  "HTTPS_PROXY",
+  "ALL_PROXY",
+  "NO_PROXY",
+  "http_proxy",
+  "https_proxy",
+  "all_proxy",
+  "no_proxy",
+] as const;
+
+export interface SanitizedEnvOptions {
+  readonly extra?: Readonly<Record<string, string>>;
+  readonly unset?: readonly string[];
+  readonly prependPath?: readonly string[];
+}
+
+function deleteEnvKey(env: NodeJS.ProcessEnv, key: string): void {
+  if (process.platform !== "win32") {
+    delete env[key];
+    return;
+  }
+  const lower = key.toLowerCase();
+  for (const existing of Object.keys(env)) {
+    if (existing.toLowerCase() === lower) delete env[existing];
+  }
+}
+
+export function buildSanitizedEnv(options: SanitizedEnvOptions = {}): NodeJS.ProcessEnv {
   const env: NodeJS.ProcessEnv = {};
   for (const key of ENV_WHITELIST) {
     const value = process.env[key];
     if (value !== undefined) env[key] = value;
   }
-  for (const [key, value] of Object.entries(extra)) env[key] = value;
+  for (const key of options.unset ?? []) {
+    deleteEnvKey(env, key);
+  }
+  const extra = options.extra ?? {};
+  if (process.platform === "win32") {
+    for (const key of Object.keys(extra)) {
+      deleteEnvKey(env, key);
+    }
+  }
+  for (const [key, value] of Object.entries(extra)) {
+    env[key] = value;
+  }
+  const prepend = (options.prependPath ?? []).map((entry) => entry.trim()).filter((entry) => entry !== "");
+  if (prepend.length > 0) {
+    const pathKeys = Object.keys(env).filter((key) => key.toLowerCase() === "path");
+    const pathKey = pathKeys[0] ?? "PATH";
+    const current = pathKeys
+      .map((key) => env[key])
+      .filter((value): value is string => value !== undefined && value !== "")
+      .join(delimiter);
+    deleteEnvKey(env, pathKey);
+    env[pathKey] = current !== "" ? `${prepend.join(delimiter)}${delimiter}${current}` : prepend.join(delimiter);
+  }
   return env;
+}
+
+export function sanitizedEnv(extra: Readonly<Record<string, string>> = {}): NodeJS.ProcessEnv {
+  return buildSanitizedEnv({ extra });
 }
 
 export interface SpawnSpec {

@@ -10,6 +10,11 @@ import { CapsuleSchema } from "../domain/capsule.js";
 import { McpServerInputSchema, McpServerSchema } from "../domain/mcp.js";
 import { ModelProfileSchema, ModelProfileViewSchema, ModelTestResultSchema } from "../domain/model.js";
 import { ProviderModelSchema, ProviderStatusSchema } from "../domain/provider.js";
+import {
+  AgentSandboxProfileSchema,
+  SandboxTestResultSchema,
+  TaskWorktreeStateSchema,
+} from "../domain/sandbox.js";
 import { TaskViewSchema } from "../domain/task.js";
 import { WorkspaceSchema } from "../domain/workspace.js";
 import { SessionSummarySchema } from "../session/derive.js";
@@ -120,6 +125,29 @@ export const METHODS = {
     }),
     result: Empty,
   },
+  "task.worktree.diff": {
+    params: z.object({ sessionId: z.string().min(1), taskId: z.string().min(1) }),
+    result: z.object({
+      state: TaskWorktreeStateSchema,
+      branch: z.string().optional(),
+      files: z.array(z.string()),
+      stat: z.string(),
+      patch: z.string(),
+      message: z.string().optional(),
+    }),
+  },
+  "task.worktree.apply": {
+    params: z.object({ sessionId: z.string().min(1), taskId: z.string().min(1) }),
+    result: z.object({
+      applied: z.boolean(),
+      files: z.array(z.string()),
+      message: z.string(),
+    }),
+  },
+  "task.worktree.discard": {
+    params: z.object({ sessionId: z.string().min(1), taskId: z.string().min(1) }),
+    result: Empty,
+  },
 
   "agent.list": {
     params: Empty,
@@ -140,6 +168,22 @@ export const METHODS = {
   "agent.models": {
     params: z.object({ agentId: z.string().min(1), workspaceId: z.string().min(1) }),
     result: z.array(ProviderModelSchema),
+  },
+  "agent.sandbox.set": {
+    params: z.object({
+      agentId: z.string().min(1),
+      sandbox: AgentSandboxProfileSchema,
+      secretValues: z.record(z.string(), z.string()).optional(),
+    }),
+    result: AgentSandboxProfileSchema,
+  },
+  "agent.sandbox.test": {
+    params: z.object({
+      agentId: z.string().min(1),
+      targetUrl: z.string().trim().min(1).max(2048),
+      sandbox: AgentSandboxProfileSchema.optional(),
+    }),
+    result: SandboxTestResultSchema,
   },
 
   "model.list": {

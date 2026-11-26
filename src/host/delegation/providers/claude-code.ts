@@ -58,6 +58,7 @@ const DEFAULT_TIMEOUT_MS = 30 * 60 * 1000;
 export class ClaudeCodeProvider implements DelegationProvider {
   readonly id = CLAUDE_CODE_ID;
   readonly capabilities = CLAUDE_CODE_CAPABILITIES;
+  readonly supportsSandbox = { env: true, network: true, worktree: true } as const;
 
   constructor(private readonly deps: ClaudeCodeDeps = {}) {}
 
@@ -135,6 +136,7 @@ export class ClaudeCodeProvider implements DelegationProvider {
           : await runProcess(this.deps.binary ?? "claude", args, {
               cwd: request.workspace,
               input: stdin,
+              ...(request.env === undefined ? {} : { env: request.env as NodeJS.ProcessEnv }),
               ...(this.deps.timeoutMs !== undefined
                 ? { timeoutMs: this.deps.timeoutMs }
                 : { idleTimeoutMs: DEFAULT_TIMEOUT_MS }),

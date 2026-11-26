@@ -151,6 +151,7 @@ export function kimiEndpoint(homeDir = homedir()): Endpoint | null {
 export class KimiCodeProvider implements DelegationProvider {
   readonly id = "kimi-code";
   readonly capabilities = CAPABILITIES;
+  readonly supportsSandbox = { env: false, network: false, worktree: true } as const;
 
   constructor(private readonly deps: Deps = {}) {}
 

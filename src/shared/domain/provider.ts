@@ -7,6 +7,7 @@
 
 import { z } from "zod";
 import type { DelegationEvent, DelegationRequest, DelegationResult } from "./delegation.js";
+import { AgentSandboxProfileSchema, SandboxCapabilitiesSchema, type SandboxCapabilities } from "./sandbox.js";
 
 /** 兼容性声明。官方协议 / 有文档的 CLI / 逆向出来的私有存储。 */
 export const FragilitySchema = z.enum(["official", "documented", "reverse-engineered"]);
@@ -60,6 +61,8 @@ export const ProviderStatusSchema = z.object({
   checkedAt: z.string(),
   selectedModel: z.string().optional(),
   permissionPolicy: z.enum(["allow", "deny"]).optional(),
+  sandbox: AgentSandboxProfileSchema.optional(),
+  sandboxCapabilities: SandboxCapabilitiesSchema.optional(),
 });
 export type ProviderStatus = z.infer<typeof ProviderStatusSchema>;
 
@@ -95,6 +98,7 @@ export interface DelegationHandle {
 export interface DelegationProvider {
   readonly id: string;
   readonly capabilities: ProviderCapabilities;
+  readonly supportsSandbox?: SandboxCapabilities;
   detect(): Promise<ProviderInstallation>;
   listModels?(workspace: string): Promise<ProviderModel[]>;
   listSessions(workspace: string, page: ProviderPage): Promise<ProviderSessionSummary[]>;
