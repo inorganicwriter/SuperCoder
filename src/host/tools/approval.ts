@@ -110,6 +110,19 @@ export class ApprovalBroker {
       decision,
       reason: decision === "deny" ? "用户拒绝了本次工具调用。" : "已允许",
     });
+    if (decision === "allow" && remember !== "none") {
+      for (const sibling of this.pending.values()) {
+        if (sibling.session.sessionId !== entry.session.sessionId || sibling.toolName !== entry.toolName) continue;
+        clearTimeout(sibling.timer);
+        this.pending.delete(sibling.callId);
+        sibling.session.append("tool/decision", {
+          callId: sibling.callId,
+          decision: "allow",
+          remember,
+        });
+        sibling.resolve({ decision: "allow", reason: "已允许" });
+      }
+    }
     return true;
   }
 

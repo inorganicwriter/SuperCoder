@@ -93,6 +93,7 @@ export function registerBuiltinTools(registry: ToolRegistry, services: BuiltinTo
             label: agent.label,
             available,
             ...(agent.selectedModel === undefined ? {} : { model: agent.selectedModel }),
+            ...(agent.sandbox?.workspace.isolation === "worktree" ? { parallel_write: true } : {}),
             ...(agent.reason === undefined || available ? {} : { reason: agent.reason }),
           };
         }),

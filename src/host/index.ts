@@ -270,6 +270,8 @@ export async function startHost(options: HostOptions = {}): Promise<RunningHost>
     logger,
     language,
     workspacePathOf: (session) => workspacePathOf(session.meta.workspace),
+    canParallelDispatch: (agentId, mode) =>
+      mode === "read-only" || agentSandboxes.get(agentId).workspace.isolation === "worktree",
     sharedContext: (session) => sharedContextFor(sessions.capsules(session.meta.workspace), session.sessionId, session.meta.createdAt),
   });
 

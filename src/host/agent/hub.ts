@@ -27,6 +27,7 @@ export interface AgentHubDeps {
   readonly language: () => "zh-CN" | "en";
   readonly workspacePathOf: (session: SessionHandle) => string;
   readonly maxSteps?: number;
+  readonly canParallelDispatch?: (agentId: string, mode: "read-only" | "write") => boolean;
   /** 本工作区其它对话保存的共享上下文，见 TurnDeps.sharedContext。 */
   readonly sharedContext?: (session: SessionHandle) => string;
 }
@@ -69,6 +70,7 @@ export class AgentHub {
       logger: this.deps.logger,
       language: this.deps.language,
       workspacePath: () => this.deps.workspacePathOf(session),
+      ...(this.deps.canParallelDispatch === undefined ? {} : { canParallelDispatch: this.deps.canParallelDispatch }),
       ...(this.deps.sharedContext === undefined ? {} : { sharedContext: this.deps.sharedContext }),
       ...(this.deps.maxSteps === undefined ? {} : { maxSteps: this.deps.maxSteps }),
     });

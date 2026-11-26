@@ -26,6 +26,7 @@ import type { ExternalToolSource, ToolRegistry } from "../tools/registry.js";
 import type { ApprovalBroker } from "../tools/approval.js";
 import { activeSummary, buildTurnContext } from "./context.js";
 import { COMPRESS_AT, DEFAULT_CONTEXT_TOKENS, compressionCut, estimateTokens, summarize, transcriptFor } from "./compress.js";
+import { partitionToolCalls, type PreparedToolCall } from "./parallel.js";
 import { buildSystemPrompt } from "./prompt/system.js";
 
 export const MAX_STEPS = 8;
@@ -40,6 +41,8 @@ export interface TurnDeps {
   readonly language: () => "zh-CN" | "en";
   readonly workspacePath: () => string;
   readonly maxSteps?: number;
+  readonly canParallelDispatch?: (agentId: string, mode: "read-only" | "write") => boolean;
+  readonly maxParallelCalls?: number;
   /** 本工作区其它对话保存的共享上下文（胶囊），新对话开始时带入。 */
   readonly sharedContext?: (session: SessionHandle) => string;
 }
@@ -193,32 +196,53 @@ export class TurnRunner {
         }
 
         const workspace = this.deps.workspacePath();
-        for (const call of calls) {
-          if (signal.aborted) break;
+        const prepared: PreparedToolCall[] = calls.map((call) => {
           const args = parseArgs(call.arguments);
-          if (!args.ok) {
-            session.append("tool/call", { callId: call.id, name: call.name, args: call.arguments });
+          return args.ok
+            ? { kind: "valid", call, args: args.value }
+            : { kind: "invalid", call, message: args.message };
+        });
+        const batches = partitionToolCalls(prepared, {
+          canParallelDispatch: this.deps.canParallelDispatch,
+          maxParallel: this.deps.maxParallelCalls,
+        });
+        const executeOne = async (item: PreparedToolCall): Promise<void> => {
+          if (item.kind === "invalid") {
+            session.append("tool/call", {
+              callId: item.call.id,
+              name: item.call.name,
+              args: item.call.arguments,
+            });
             session.append("tool/result", {
-              callId: call.id,
+              callId: item.call.id,
               outcome: {
                 status: "error",
                 code: "invalid_args",
-                message: args.message,
+                message: item.message,
                 retryable: true,
               },
             });
-            continue;
+            return;
           }
           const { outcome } = await this.deps.tools.run({
             session,
             workspaceId: session.meta.workspace,
             workspacePath: workspace,
             mode: "write",
-            name: call.name,
-            args: args.value,
+            name: item.call.name,
+            args: item.args,
             signal,
           });
           if (outcome.status === "uncertain") sawUncertain = true;
+        };
+
+        for (const batch of batches) {
+          if (signal.aborted) break;
+          if (batch.length === 1) {
+            await executeOne(batch[0]!);
+          } else {
+            await Promise.all(batch.map((item) => executeOne(item)));
+          }
         }
         // 一次完整步骤（含工具执行）收尾：走到这里才进入下一步。
         step += 1;
