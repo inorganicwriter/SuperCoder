@@ -19,12 +19,13 @@ import { KimiStoreProbe } from "./providers/kimi-store.js";
 import { KimiCodeProvider } from "./providers/kimi.js";
 import { OpenCodeDesktopProvider } from "./providers/opencode-desktop.js";
 import type { FamilySpec } from "./provider-select.js";
+import type { CompiledSandboxEnv } from "./sandbox-preferences.js";
 
 export interface FamilyOptions {
   readonly homeDir: string;
   readonly configFile?: string;
   readonly allowPermissions?: (agentId: string) => boolean;
-  readonly compileEnv?: (agentId: string) => Promise<{ readonly env: NodeJS.ProcessEnv; readonly dispose: () => void }>;
+  readonly compileEnv?: (agentId: string) => Promise<CompiledSandboxEnv>;
   /** 测试注入：替代注册表查询。 */
   readonly findInstalled?: (displayName: string, exeName: string) => string | null;
 }

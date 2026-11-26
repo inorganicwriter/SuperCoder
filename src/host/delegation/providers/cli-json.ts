@@ -83,10 +83,12 @@ export class CliJsonProvider implements DelegationProvider {
     if (request.modelConfig) return { status: "failed", diagnostic: diagnostic("handshake", "protocol", "此 CLI 备用接入不支持 SuperCoder API 档案"), durationMs: 0 };
     const dir = mkdtempSync(join(tmpdir(), "supercoder-cli-"));
     const outFile = join(dir, "last-message.txt");
+    const containerOutDir = "/tmp/supercoder-cli-out";
+    const outArg = request.docker !== undefined ? `${containerOutDir}/last-message.txt` : outFile;
     const emit = (event: DelegationEvent): void => request.onEvent(event);
     const emitDelivery = (state: string): void => emit({ type: "trace", summary: `delivery:${state}` });
 
-    const args = ["exec", "--json", "-o", outFile, "--sandbox", request.mode === "read-only" ? "read-only" : "workspace-write"];
+    const args = ["exec", "--json", "-o", outArg, "--sandbox", request.mode === "read-only" ? "read-only" : "workspace-write"];
     if (request.model) args.push("--model", request.model);
     if (request.resumeSessionId !== undefined && request.resumeSessionId !== "") {
       args.push("resume", request.resumeSessionId);
@@ -103,6 +105,17 @@ export class CliJsonProvider implements DelegationProvider {
               cwd: request.workspace,
               input: stdin,
               ...(request.env === undefined ? {} : { env: request.env as NodeJS.ProcessEnv }),
+              ...(request.docker === undefined
+                ? {}
+                : {
+                    docker: {
+                      ...request.docker,
+                      extraMounts: [
+                        ...request.docker.extraMounts,
+                        { host: dir, container: containerOutDir, readOnly: false },
+                      ],
+                    },
+                  }),
               ...(this.deps.timeoutMs !== undefined
                 ? { timeoutMs: this.deps.timeoutMs }
                 : { idleTimeoutMs: DEFAULT_TIMEOUT_MS }),

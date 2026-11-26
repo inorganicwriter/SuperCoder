@@ -78,6 +78,7 @@ function AgentRow({ agent }: { agent: ProviderStatus }): JSX.Element {
         {agent.sandbox?.network.mode === "direct" ? <span className={styles.via}>{t("agent.badgeDirect")}</span> : null}
         {agent.sandbox?.network.mode === "offline" ? <span className={styles.via}>{t("agent.badgeOffline")}</span> : null}
         {agent.sandbox?.workspace.isolation === "worktree" ? <span className={styles.via}>{t("agent.badgeWorktree")}</span> : null}
+        {agent.sandbox?.backend.kind === "docker" ? <span className={styles.via}>{t("agent.badgeDocker")}</span> : null}
         {agent.level !== null && !historyOnly ? <span className={styles.via}>{t(VIA[agent.level])}</span> : null}
         <span className={hasInterface ? styles.statusReady : styles.statusMuted}>
           {historyOnly ? t("agent.historyOnly") : hasInterface ? t("agent.installed") : t("agent.missing")}
@@ -130,6 +131,7 @@ function AgentRow({ agent }: { agent: ProviderStatus }): JSX.Element {
         <AgentSandboxEditor agent={agent} />
         </>
       ) : null}
+      {!hasInterface && agent.sandboxCapabilities?.docker === true ? <AgentSandboxEditor agent={agent} /> : null}
       {hasInterface && !canLoad ? <p className={styles.hint}>{t("agent.modelNeedsWorkspace")}</p> : null}
       {models?.length === 0 ? <p className={styles.hint}>{t("agent.modelNone")}</p> : null}
       </div>

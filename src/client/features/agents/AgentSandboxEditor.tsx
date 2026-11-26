@@ -7,6 +7,8 @@ import {
   ENV_KEY_PATTERN,
   isSensitiveEnvKey,
   type AgentSandboxProfile,
+  type DockerMount,
+  type DockerNetworkIsolation,
   type NetworkMode,
   type SandboxTestResult,
   type WorkspaceIsolation,
@@ -29,6 +31,13 @@ interface DraftState {
   unsetText: string;
   prependPathText: string;
   isolatedHome: boolean;
+  backendKind: "process" | "docker";
+  dockerImage: string;
+  dockerNetwork: DockerNetworkIsolation;
+  dockerMemory: string;
+  dockerCpus: string;
+  dockerReadOnlyRoot: boolean;
+  dockerMountsText: string;
 }
 
 function splitList(raw: string): string[] {
@@ -38,7 +47,39 @@ function splitList(raw: string): string[] {
     .filter((entry) => entry !== "");
 }
 
+function formatMounts(mounts: readonly DockerMount[]): string {
+  return mounts.map((mount) => `${mount.host}:${mount.container}:${mount.readOnly ? "ro" : "rw"}`).join("\n");
+}
+
+function parseMounts(raw: string): { ok: true; mounts: DockerMount[] } | { ok: false; message: string } {
+  const mounts: DockerMount[] = [];
+  for (const rawLine of raw.split(/\r?\n/)) {
+    const line = rawLine.trim();
+    if (line === "" || line.startsWith("#")) continue;
+    let body = line;
+    let readOnly = true;
+    const modeMatch = /:(ro|rw)$/i.exec(body);
+    if (modeMatch !== null) {
+      readOnly = modeMatch[1]!.toLowerCase() === "ro";
+      body = body.slice(0, modeMatch.index);
+    }
+    const splitAt = body.lastIndexOf(":/");
+    const windowsDriveOnly = splitAt === 1 && /^[A-Za-z]:\//.test(body);
+    if (splitAt <= 0 || windowsDriveOnly) {
+      return { ok: false, message: `${t("agent.sandboxInvalid")} (${line})` };
+    }
+    const host = body.slice(0, splitAt).trim();
+    const container = body.slice(splitAt + 1).trim();
+    if (host === "" || !container.startsWith("/")) {
+      return { ok: false, message: `${t("agent.sandboxInvalid")} (${line})` };
+    }
+    mounts.push({ host, container, readOnly });
+  }
+  return { ok: true, mounts };
+}
+
 function toDraft(profile: AgentSandboxProfile): DraftState {
+  const docker = profile.backend.docker;
   return {
     mode: profile.network.mode,
     proxyUrl: profile.network.proxyUrl ?? "",
@@ -54,6 +95,13 @@ function toDraft(profile: AgentSandboxProfile): DraftState {
     unsetText: profile.env.unset.join(", "),
     prependPathText: profile.env.prependPath.join("\n"),
     isolatedHome: profile.env.isolatedHome,
+    backendKind: profile.backend.kind,
+    dockerImage: docker?.image ?? "",
+    dockerNetwork: docker?.networkIsolation ?? "proxy-only",
+    dockerMemory: docker?.memoryLimit ?? "",
+    dockerCpus: docker?.cpuLimit === undefined ? "" : String(docker.cpuLimit),
+    dockerReadOnlyRoot: docker?.readOnlyRoot ?? false,
+    dockerMountsText: docker ? formatMounts(docker.extraMounts) : "",
   };
 }
 
@@ -94,6 +142,31 @@ function buildProfileFromDraft(
     }
   }
 
+  let backend: AgentSandboxProfile["backend"] = { kind: "process" };
+  if (draft.backendKind === "docker") {
+    const parsedMounts = parseMounts(draft.dockerMountsText);
+    if (!parsedMounts.ok) return parsedMounts;
+    let cpuLimit: number | undefined;
+    if (draft.dockerCpus.trim() !== "") {
+      const value = Number(draft.dockerCpus.trim());
+      if (!Number.isFinite(value) || value <= 0) {
+        return { ok: false, message: `${t("agent.sandboxInvalid")} (${draft.dockerCpus})` };
+      }
+      cpuLimit = value;
+    }
+    backend = {
+      kind: "docker",
+      docker: {
+        image: draft.dockerImage.trim(),
+        networkIsolation: draft.dockerNetwork,
+        ...(draft.dockerMemory.trim() === "" ? {} : { memoryLimit: draft.dockerMemory.trim() }),
+        ...(cpuLimit === undefined ? {} : { cpuLimit }),
+        readOnlyRoot: draft.dockerReadOnlyRoot,
+        extraMounts: parsedMounts.mounts,
+      },
+    };
+  }
+
   const candidate = {
     network: {
       mode: draft.mode,
@@ -116,6 +189,7 @@ function buildProfileFromDraft(
     workspace: {
       isolation: draft.isolation,
     },
+    backend,
   };
 
   const parsed = AgentSandboxProfileSchema.safeParse(candidate);
@@ -132,8 +206,9 @@ export function AgentSandboxEditor({ agent }: { readonly agent: ProviderStatus }
   const store = useStore();
   const savedProfile = agent.sandbox ?? DEFAULT_AGENT_SANDBOX_PROFILE;
   const savedKey = JSON.stringify(savedProfile);
-  const capabilities = agent.sandboxCapabilities ?? { env: true, network: true, worktree: true };
+  const capabilities = agent.sandboxCapabilities ?? { env: true, network: true, worktree: true, docker: false };
   const processUnsupported = !capabilities.network && !capabilities.env;
+  const dockerAvailable = capabilities.docker === true;
   const presetDomains = AGENT_ALLOWLIST_PRESETS[agent.id];
 
   const [draft, setDraft] = useState<DraftState>(() => toDraft(savedProfile));
@@ -421,6 +496,122 @@ export function AgentSandboxEditor({ agent }: { readonly agent: ProviderStatus }
             />
             <span>{t("agent.isolatedHome")}</span>
           </label>
+
+          <div className={styles.fields}>
+            <div className={styles.field}>
+              <span>{t("agent.backendLabel")}</span>
+              <Select
+                value={draft.backendKind}
+                disabled={processUnsupported}
+                ariaLabel={t("agent.backendLabel")}
+                options={[
+                  { value: "process", label: t("agent.backendProcess") },
+                  ...(dockerAvailable || draft.backendKind === "docker"
+                    ? [{ value: "docker", label: t("agent.backendDocker") }]
+                    : []),
+                ]}
+                onChange={(next) => {
+                  setSavedFlag(false);
+                  setDraft((prev) => ({ ...prev, backendKind: next as "process" | "docker" }));
+                }}
+              />
+            </div>
+
+            {draft.backendKind === "docker" ? (
+              <div className={styles.field}>
+                <span>{t("agent.dockerNetwork")}</span>
+                <Select
+                  value={draft.dockerNetwork}
+                  ariaLabel={t("agent.dockerNetwork")}
+                  options={[
+                    { value: "proxy-only", label: t("agent.dockerNetProxyOnly") },
+                    { value: "bridge", label: t("agent.dockerNetBridge") },
+                    { value: "none", label: t("agent.dockerNetNone") },
+                  ]}
+                  onChange={(next) => {
+                    setSavedFlag(false);
+                    setDraft((prev) => ({ ...prev, dockerNetwork: next as DockerNetworkIsolation }));
+                  }}
+                />
+              </div>
+            ) : null}
+          </div>
+
+          {!dockerAvailable ? <p className={styles.hint}>{t("agent.dockerUnavailable")}</p> : null}
+
+          {draft.backendKind === "docker" ? (
+            <>
+              <label className={styles.field}>
+                <span>{t("agent.dockerImage")}</span>
+                <input
+                  type="text"
+                  className={styles.input}
+                  value={draft.dockerImage}
+                  placeholder={t("agent.dockerImagePlaceholder")}
+                  onChange={(event) => {
+                    setSavedFlag(false);
+                    setDraft((prev) => ({ ...prev, dockerImage: event.target.value }));
+                  }}
+                />
+              </label>
+
+              <div className={styles.fields}>
+                <label className={styles.field}>
+                  <span>{t("agent.dockerMemory")}</span>
+                  <input
+                    type="text"
+                    className={styles.input}
+                    value={draft.dockerMemory}
+                    placeholder={t("agent.dockerMemoryPlaceholder")}
+                    onChange={(event) => {
+                      setSavedFlag(false);
+                      setDraft((prev) => ({ ...prev, dockerMemory: event.target.value }));
+                    }}
+                  />
+                </label>
+                <label className={styles.field}>
+                  <span>{t("agent.dockerCpus")}</span>
+                  <input
+                    type="text"
+                    className={styles.input}
+                    value={draft.dockerCpus}
+                    placeholder={t("agent.dockerCpusPlaceholder")}
+                    onChange={(event) => {
+                      setSavedFlag(false);
+                      setDraft((prev) => ({ ...prev, dockerCpus: event.target.value }));
+                    }}
+                  />
+                </label>
+              </div>
+
+              <label className={styles.checkboxRow}>
+                <input
+                  type="checkbox"
+                  checked={draft.dockerReadOnlyRoot}
+                  onChange={(event) => {
+                    setSavedFlag(false);
+                    setDraft((prev) => ({ ...prev, dockerReadOnlyRoot: event.target.checked }));
+                  }}
+                />
+                <span>{t("agent.dockerReadOnlyRoot")}</span>
+              </label>
+
+              <label className={styles.field}>
+                <span>{t("agent.dockerMounts")}</span>
+                <textarea
+                  className={styles.textarea}
+                  rows={2}
+                  value={draft.dockerMountsText}
+                  placeholder={t("agent.dockerMountsPlaceholder")}
+                  onChange={(event) => {
+                    setSavedFlag(false);
+                    setDraft((prev) => ({ ...prev, dockerMountsText: event.target.value }));
+                  }}
+                />
+                <span className={styles.hint}>{t("agent.dockerHint")}</span>
+              </label>
+            </>
+          ) : null}
 
           <div className={styles.testRow}>
             <input

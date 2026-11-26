@@ -12,6 +12,54 @@ export type NetworkMode = z.infer<typeof NetworkModeSchema>;
 export const WorkspaceIsolationSchema = z.enum(["shared", "worktree"]);
 export type WorkspaceIsolation = z.infer<typeof WorkspaceIsolationSchema>;
 
+export const DockerNetworkIsolationSchema = z.enum(["proxy-only", "bridge", "none"]);
+export type DockerNetworkIsolation = z.infer<typeof DockerNetworkIsolationSchema>;
+
+export const DockerMountSchema = z.object({
+  host: z.string().trim().min(1).max(4096),
+  container: z
+    .string()
+    .trim()
+    .min(1)
+    .max(4096)
+    .refine((value) => value.startsWith("/"), {
+      message: "容器内挂载路径必须是以 / 开头的绝对路径",
+    }),
+  readOnly: z.boolean().default(true),
+});
+export type DockerMount = z.infer<typeof DockerMountSchema>;
+
+export const DockerMemoryLimitSchema = z
+  .string()
+  .trim()
+  .regex(/^[1-9]\d*[kmgKMG]?$/, "内存上限格式无效（例如 2g、512m）");
+
+export const DockerBackendConfigSchema = z.object({
+  image: z.string().trim().max(512).default(""),
+  networkIsolation: DockerNetworkIsolationSchema.default("proxy-only"),
+  memoryLimit: DockerMemoryLimitSchema.optional(),
+  cpuLimit: z.number().positive().max(64).optional(),
+  readOnlyRoot: z.boolean().default(false),
+  extraMounts: z.array(DockerMountSchema).max(16).default(() => []),
+});
+export type DockerBackendConfig = z.infer<typeof DockerBackendConfigSchema>;
+
+export const SandboxBackendSchema = z
+  .object({
+    kind: z.enum(["process", "docker"]).default("process"),
+    docker: DockerBackendConfigSchema.optional(),
+  })
+  .superRefine((backend, ctx) => {
+    if (backend.kind === "docker" && (!backend.docker || backend.docker.image.trim() === "")) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ["docker", "image"],
+        message: "启用 Docker 容器隔离时必须填写镜像名称",
+      });
+    }
+  });
+export type SandboxBackend = z.infer<typeof SandboxBackendSchema>;
+
 export const ENV_KEY_PATTERN = /^[A-Za-z_][A-Za-z0-9_]{0,127}$/;
 export const EnvKeySchema = z.string().regex(ENV_KEY_PATTERN, "环境变量名仅支持字母、数字与下划线，且不能以数字开头");
 
@@ -85,6 +133,9 @@ export const AgentSandboxProfileSchema = z.object({
   workspace: SandboxWorkspaceSchema.default(() => ({
     isolation: "shared" as const,
   })),
+  backend: SandboxBackendSchema.default(() => ({
+    kind: "process" as const,
+  })),
 });
 export type AgentSandboxProfile = z.infer<typeof AgentSandboxProfileSchema>;
 
@@ -103,6 +154,7 @@ export const SandboxCapabilitiesSchema = z.object({
   env: z.boolean(),
   network: z.boolean(),
   worktree: z.boolean(),
+  docker: z.boolean().optional(),
   note: z.string().optional(),
 });
 export type SandboxCapabilities = z.infer<typeof SandboxCapabilitiesSchema>;
@@ -137,6 +189,7 @@ export function isSensitiveEnvKey(key: string): boolean {
 /** 是否启用了需要子进程级环境变量或网络接入的沙箱配置。 */
 export function hasActiveProcessSandboxOverrides(profile: AgentSandboxProfile): boolean {
   return (
+    profile.backend.kind === "docker" ||
     profile.network.mode !== "inherit" ||
     profile.network.allowlist.length > 0 ||
     profile.network.denylist.length > 0 ||

@@ -24,6 +24,7 @@ import type {
 } from "../../shared/domain/delegation.js";
 import type { TaskMode, TaskType, TaskView } from "../../shared/domain/task.js";
 import { ensureDir, writeJsonAtomic } from "../boot/atomic.js";
+import type { DockerAvailability } from "../boot/docker-runtime.js";
 import type { Logger } from "../boot/logger.js";
 import { fail, isRpcFailure, messageOf } from "../boot/failure.js";
 import type { SessionHandle } from "../session/handle.js";
@@ -52,6 +53,7 @@ export interface DelegationRunnerDeps {
   readonly sandboxes?: AgentSandboxPreferences;
   readonly networkProxy?: AgentNetworkProxy;
   readonly worktreesDir?: string;
+  readonly detectDocker?: () => Promise<DockerAvailability>;
 }
 
 export interface DispatchInput {
@@ -178,8 +180,21 @@ export class DelegationRunner {
   private async execute(input: DispatchInput, childId: string): Promise<TaskView> {
     const { select, locks, logger } = this.deps;
     const sandbox = this.deps.sandboxes?.get(input.agentId);
+    const isDockerBackend = sandbox?.backend.kind === "docker";
+    if (isDockerBackend && this.deps.detectDocker !== undefined) {
+      const dockerStatus = await this.deps.detectDocker();
+      if (!dockerStatus.available) {
+        fail(
+          "unsupported",
+          `该 Agent 已启用 Docker 容器隔离，但当前未检测到可用 Docker 服务：${dockerStatus.reason ?? "请先启动 Docker"}。`,
+        );
+      }
+    }
     const requireProcessSandbox = sandbox !== undefined && hasActiveProcessSandboxOverrides(sandbox);
-    const candidates = await select.resolveCandidates(input.agentId, { requireProcessSandbox });
+    const candidates = await select.resolveCandidates(input.agentId, {
+      requireProcessSandbox,
+      allowDockerFallback: isDockerBackend,
+    });
     let resolved = candidates[0]!;
 
     const useWorktree =
@@ -312,6 +327,7 @@ export class DelegationRunner {
           ...(input.model === undefined ? {} : { model: input.model }),
           ...(input.modelConfig === undefined ? {} : { modelConfig: input.modelConfig }),
           ...(compiledEnv === null ? {} : { env: compiledEnv.env }),
+          ...(compiledEnv?.docker === undefined ? {} : { docker: compiledEnv.docker }),
           ...(input.resumeSessionId === undefined ? {} : { resumeSessionId: input.resumeSessionId }),
           signal: controller.signal,
           onEvent: (event) => {

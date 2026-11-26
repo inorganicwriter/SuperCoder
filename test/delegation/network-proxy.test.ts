@@ -288,4 +288,39 @@ describe("AgentNetworkProxy", () => {
     expect(probeViaHttpUpstream.statusCode).toBe(200);
     expect(stripIpv6Brackets("[::1]")).toBe("::1");
   });
+
+  it("exposes authenticated Docker gateway port lazily and tears down on close", async () => {
+    const target = await startHttpEchoServer("docker-target");
+    const proxy = new AgentNetworkProxy();
+    await proxy.startDockerGateway();
+    expect(proxy.dockerPort).toBeGreaterThan(0);
+
+    const unauth = await proxyHttpRequest(
+      `http://127.0.0.1:${proxy.dockerPort}`,
+      `http://127.0.0.1:${target.port}/ping`,
+    );
+    expect(unauth.status).toBe(407);
+
+    const scope = proxy.registerScope({
+      agentId: "docker-agent",
+      forDocker: true,
+      network: AgentSandboxProfileSchema.parse({
+        network: { mode: "direct", allowlist: ["127.0.0.1"] },
+      }).network,
+    });
+    expect(scope.proxyUrl).toContain(`@host.docker.internal:${proxy.dockerPort}`);
+
+    // Connect via 127.0.0.1 using the registered Docker token to avoid requiring /etc/hosts entry in test env
+    const authUrl = scope.proxyUrl.replace("@host.docker.internal:", "@127.0.0.1:");
+    const allowed = await proxyHttpRequest(authUrl, `http://127.0.0.1:${target.port}/ok`);
+    expect(allowed.status).toBe(200);
+    expect(allowed.body).toBe("docker-target:GET:/ok");
+
+    const blocked = await proxyHttpRequest(authUrl, "http://blocked.docker.test/secret");
+    expect(blocked.status).toBe(403);
+
+    scope.dispose();
+    await proxy.close();
+    expect(proxy.dockerPort).toBe(0);
+  });
 });

@@ -24,6 +24,7 @@ import type {
   ProviderPage,
   ProviderSessionSummary,
 } from "../../../shared/domain/provider.js";
+import type { DockerBackendConfig } from "../../../shared/domain/sandbox.js";
 import { existsSync } from "node:fs";
 import { join } from "node:path";
 import { runProcess, sanitizedEnv, spawnChild, whichBinary } from "../../boot/exec.js";
@@ -54,7 +55,11 @@ export interface CodexAppServerDeps {
   readonly detect?: () => Promise<ProviderInstallation>;
   readonly turnTimeoutMs?: number;
   readonly allowPermissions?: () => boolean;
-  readonly compileEnv?: () => Promise<{ readonly env: NodeJS.ProcessEnv; readonly dispose: () => void }>;
+  readonly compileEnv?: () => Promise<{
+    readonly env: NodeJS.ProcessEnv;
+    readonly docker?: DockerBackendConfig;
+    readonly dispose: () => void;
+  }>;
 }
 
 const DEFAULT_TURN_TIMEOUT_MS = 30 * 60 * 1000;
@@ -73,7 +78,7 @@ export class CodexAppServerProvider implements DelegationProvider {
 
   async listModels(workspace: string): Promise<ProviderModel[]> {
     const compiled = this.deps.createTransport === undefined && this.deps.compileEnv ? await this.deps.compileEnv() : undefined;
-    const transport = this.deps.createTransport?.(workspace) ?? spawnCodexTransport(workspace || process.cwd(), undefined, undefined, compiled?.env);
+    const transport = this.deps.createTransport?.(workspace) ?? spawnCodexTransport(workspace || process.cwd(), undefined, undefined, compiled?.env, compiled?.docker);
     try {
       await initialize(transport);
       const result = asRecord(await transport.request("model/list", { limit: 100, includeHidden: false }));
@@ -87,14 +92,15 @@ export class CodexAppServerProvider implements DelegationProvider {
 
   async listSessions(workspace: string, page: ProviderPage): Promise<ProviderSessionSummary[]> {
     const compiled = this.deps.createTransport === undefined && this.deps.compileEnv ? await this.deps.compileEnv() : undefined;
-    const transport = this.deps.createTransport?.(workspace) ?? spawnCodexTransport(workspace || process.cwd(), undefined, undefined, compiled?.env);
+    const transport = this.deps.createTransport?.(workspace) ?? spawnCodexTransport(workspace || process.cwd(), undefined, undefined, compiled?.env, compiled?.docker);
+    const rpcCwd = compiled?.docker !== undefined ? "/workspace" : workspace;
     try {
       await initialize(transport);
       const threads: Array<{ id?: string; name?: string | null; preview?: string; updatedAt?: number }> = [];
       let cursor: string | null = null;
       do {
         const result: { data?: typeof threads; nextCursor?: string | null } = await transport.request("thread/list", {
-          ...(workspace ? { cwd: workspace } : {}), cursor, limit: Math.min(100, page.offset + page.limit),
+          ...(rpcCwd ? { cwd: rpcCwd } : {}), cursor, limit: Math.min(100, page.offset + page.limit),
         }) as { data?: typeof threads; nextCursor?: string | null };
         threads.push(...(result.data ?? []));
         cursor = result.nextCursor ?? null;
@@ -112,7 +118,7 @@ export class CodexAppServerProvider implements DelegationProvider {
 
   async readSession(sessionId: string, page: ProviderPage): Promise<DelegationEvent[]> {
     const compiled = this.deps.createTransport === undefined && this.deps.compileEnv ? await this.deps.compileEnv() : undefined;
-    const transport = this.deps.createTransport?.("") ?? spawnCodexTransport(process.cwd(), undefined, undefined, compiled?.env);
+    const transport = this.deps.createTransport?.("") ?? spawnCodexTransport(process.cwd(), undefined, undefined, compiled?.env, compiled?.docker);
     try {
       await initialize(transport);
       const result = (await transport.request("thread/read", {
@@ -133,7 +139,8 @@ export class CodexAppServerProvider implements DelegationProvider {
   async delegate(request: DelegationRequest): Promise<DelegationResult> {
     const startedAt = Date.now();
     const transport =
-      this.deps.createTransport?.(request.workspace) ?? spawnCodexTransport(request.workspace, request.modelConfig, this.deps.allowPermissions, request.env);
+      this.deps.createTransport?.(request.workspace) ?? spawnCodexTransport(request.workspace, request.modelConfig, this.deps.allowPermissions, request.env, request.docker);
+    const rpcCwd = request.docker !== undefined ? "/workspace" : request.workspace;
     const candidates: AnswerCandidate[] = [];
     let phase: DelegationPhase = "handshake";
     let turnSent = false;
@@ -157,13 +164,13 @@ export class CodexAppServerProvider implements DelegationProvider {
       if (request.resumeSessionId !== undefined && request.resumeSessionId !== "") {
         const resumed = (await transport.request("thread/resume", {
           threadId: request.resumeSessionId,
-          cwd: request.workspace,
+          cwd: rpcCwd,
           sandbox: request.mode === "read-only" ? "read-only" : "workspace-write",
         })) as { thread?: { id?: string }; threadId?: string };
         threadId = resumed.thread?.id ?? resumed.threadId ?? request.resumeSessionId;
       } else {
         const thread = (await transport.request("thread/start", {
-          cwd: request.workspace,
+          cwd: rpcCwd,
           // Persist read-only sessions too, so the user's Codex client can discover them.
           ephemeral: false,
           sandbox: request.mode === "read-only" ? "read-only" : "workspace-write",
@@ -438,6 +445,7 @@ export function spawnCodexTransport(
   modelConfig?: AgentModelConfig,
   allowPermissions?: () => boolean,
   runtimeEnv?: Record<string, string | undefined>,
+  docker?: DockerBackendConfig,
 ): JsonRpcTransport {
   const args = ["app-server"];
   if (modelConfig) args.push("-c", 'model_provider="supercoder"', "-c", 'web_search="disabled"', "-c", 'model_providers.supercoder.name="SuperCoder"', "-c", `model_providers.supercoder.base_url=${JSON.stringify(modelConfig.baseUrl)}`, "-c", 'model_providers.supercoder.env_key="SUPERCODER_AGENT_API_KEY"', "-c", 'model_providers.supercoder.wire_api="responses"', "-c", "model_providers.supercoder.requires_openai_auth=false", "-c", "model_providers.supercoder.supports_websockets=false");
@@ -447,7 +455,11 @@ export function spawnCodexTransport(
       : modelConfig
         ? { env: sanitizedEnv({ SUPERCODER_AGENT_API_KEY: modelConfig.apiKey }) }
         : {};
-  const child = spawnChild(codexBinary(), args, { cwd: workspace, ...envOption });
+  const child = spawnChild(codexBinary(), args, {
+    cwd: workspace,
+    ...envOption,
+    ...(docker === undefined ? {} : { docker }),
+  });
   return createStdioTransport(child, { allowPermissions: allowPermissions ?? (() => false) });
 }
 

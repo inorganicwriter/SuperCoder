@@ -7,6 +7,7 @@
  */
 
 import { z } from "zod";
+import type { DockerBackendConfig } from "./sandbox.js";
 
 export const FailureCategorySchema = z.enum([
   "limit",
@@ -100,6 +101,8 @@ export interface DelegationRequest {
   readonly modelConfig?: AgentModelConfig;
   /** Runtime-only compiled sandbox environment variables; never serialize into events or logs. */
   readonly env?: Record<string, string | undefined>;
+  /** Runtime-only Docker container isolation config; never serialize into events or logs. */
+  readonly docker?: DockerBackendConfig;
   readonly effort?: string;
   readonly resumeSessionId?: string;
   readonly signal: AbortSignal;

@@ -78,28 +78,36 @@ export class AgentNetworkProxy {
   private server: http.Server | null = null;
   private boundPort = 0;
   private startPromise: Promise<number> | null = null;
+  private dockerServer: http.Server | null = null;
+  private dockerBoundPort = 0;
+  private dockerStartPromise: Promise<number> | null = null;
   private readonly scopes = new Map<string, ProxyScope>();
   private readonly activeSockets = new Set<net.Socket>();
+
+  private createProxyServer(): http.Server {
+    const server = http.createServer((req, res) => {
+      void this.handleHttpRequest(req, res);
+    });
+    server.on("connect", (req, clientSocket, head) => {
+      if (clientSocket instanceof net.Socket) {
+        this.trackSocket(clientSocket);
+        void this.handleConnect(req, clientSocket, head);
+      } else {
+        clientSocket.destroy();
+      }
+    });
+    server.on("connection", (socket) => {
+      this.trackSocket(socket);
+    });
+    return server;
+  }
 
   async start(): Promise<number> {
     if (this.server !== null && this.boundPort > 0) return this.boundPort;
     if (this.startPromise !== null) return this.startPromise;
 
     this.startPromise = new Promise<number>((resolve, reject) => {
-      const server = http.createServer((req, res) => {
-        void this.handleHttpRequest(req, res);
-      });
-      server.on("connect", (req, clientSocket, head) => {
-        if (clientSocket instanceof net.Socket) {
-          this.trackSocket(clientSocket);
-          void this.handleConnect(req, clientSocket, head);
-        } else {
-          clientSocket.destroy();
-        }
-      });
-      server.on("connection", (socket) => {
-        this.trackSocket(socket);
-      });
+      const server = this.createProxyServer();
       server.on("error", (error) => {
         if (this.boundPort === 0) {
           this.startPromise = null;
@@ -122,16 +130,51 @@ export class AgentNetworkProxy {
     return this.startPromise;
   }
 
+  /** 按需为 Docker 容器暴露受单次随机令牌保护的代理网关端口（绑定 0.0.0.0）。 */
+  async startDockerGateway(): Promise<number> {
+    if (this.dockerServer !== null && this.dockerBoundPort > 0) return this.dockerBoundPort;
+    if (this.dockerStartPromise !== null) return this.dockerStartPromise;
+
+    this.dockerStartPromise = new Promise<number>((resolve, reject) => {
+      const server = this.createProxyServer();
+      server.on("error", (error) => {
+        if (this.dockerBoundPort === 0) {
+          this.dockerStartPromise = null;
+          reject(error);
+        }
+      });
+      server.listen(0, "0.0.0.0", () => {
+        const address = server.address();
+        if (address === null || typeof address === "string") {
+          this.dockerStartPromise = null;
+          reject(new Error("无法绑定 Docker 代理网关端口"));
+          return;
+        }
+        this.dockerServer = server;
+        this.dockerBoundPort = address.port;
+        resolve(address.port);
+      });
+    });
+
+    return this.dockerStartPromise;
+  }
+
   get port(): number {
     return this.boundPort;
+  }
+
+  get dockerPort(): number {
+    return this.dockerBoundPort;
   }
 
   registerScope(input: {
     readonly agentId: string;
     readonly network: SandboxNetwork;
+    readonly forDocker?: boolean;
     readonly onBlocked?: (host: string) => void;
   }): { readonly proxyUrl: string; readonly dispose: () => void } {
-    if (this.boundPort <= 0) {
+    const port = input.forDocker === true ? this.dockerBoundPort : this.boundPort;
+    if (port <= 0) {
       throw new Error("AgentNetworkProxy 尚未启动");
     }
     const token = randomBytes(24).toString("hex");
@@ -140,7 +183,8 @@ export class AgentNetworkProxy {
       network: input.network,
       ...(input.onBlocked === undefined ? {} : { onBlocked: input.onBlocked }),
     });
-    const proxyUrl = `http://${encodeURIComponent(input.agentId)}:${token}@127.0.0.1:${this.boundPort}`;
+    const host = input.forDocker === true ? "host.docker.internal" : "127.0.0.1";
+    const proxyUrl = `http://${encodeURIComponent(input.agentId)}:${token}@${host}:${port}`;
     return {
       proxyUrl,
       dispose: () => {
@@ -152,17 +196,29 @@ export class AgentNetworkProxy {
   async close(): Promise<void> {
     this.scopes.clear();
     const server = this.server;
+    const dockerServer = this.dockerServer;
     this.server = null;
     this.boundPort = 0;
     this.startPromise = null;
+    this.dockerServer = null;
+    this.dockerBoundPort = 0;
+    this.dockerStartPromise = null;
     for (const socket of this.activeSockets) {
       socket.destroy();
     }
     this.activeSockets.clear();
-    if (server === null) return;
-    await new Promise<void>((resolve) => {
-      server.close(() => resolve());
-    });
+    await Promise.all([
+      server === null
+        ? Promise.resolve()
+        : new Promise<void>((resolve) => {
+            server.close(() => resolve());
+          }),
+      dockerServer === null
+        ? Promise.resolve()
+        : new Promise<void>((resolve) => {
+            dockerServer.close(() => resolve());
+          }),
+    ]);
   }
 
   async testNetwork(

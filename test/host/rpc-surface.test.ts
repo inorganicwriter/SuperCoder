@@ -138,6 +138,7 @@ describe("RPC Callable Surface", () => {
             isolatedHome: false,
           },
           workspace: { isolation: "worktree" },
+          backend: { kind: "process" },
         },
         secretValues: { CUSTOM_TOKEN: "tok-explicit-secret" },
       });
@@ -171,6 +172,7 @@ describe("RPC Callable Surface", () => {
           network: { mode: "offline", noProxy: [], allowlist: [], denylist: [] },
           env: { set: {}, secretKeys: [], unset: [], prependPath: [], isolatedHome: false },
           workspace: { isolation: "shared" },
+          backend: { kind: "process" },
         },
       });
       expect(offlineBlocked.ok).toBe(false);
@@ -217,6 +219,7 @@ describe("RPC Callable Surface", () => {
           network: { mode: "offline", noProxy: [], allowlist: [], denylist: [] },
           env: { set: {}, secretKeys: [], unset: [], prependPath: [], isolatedHome: false },
           workspace: { isolation: "shared" },
+          backend: { kind: "process" },
         },
       });
       const offlineErr = await fixture.errorOf("agent.sandbox.allowHost", {

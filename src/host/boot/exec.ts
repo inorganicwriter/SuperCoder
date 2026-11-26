@@ -11,6 +11,8 @@ import { spawn, spawnSync, type ChildProcess, type SpawnOptions } from "node:chi
 import { accessSync, constants, existsSync, readdirSync, statSync } from "node:fs";
 import { delimiter, dirname, isAbsolute, join } from "node:path";
 import { StringDecoder } from "node:string_decoder";
+import type { DockerBackendConfig } from "../../shared/domain/sandbox.js";
+import { buildDockerRunPlan, type DockerAvailability } from "./docker-runtime.js";
 
 /** 单个流的输出上限：够放一次验证/JSON 输出，又不至于把内存撑爆。 */
 const DEFAULT_MAX_OUTPUT_BYTES = 4 * 1024 * 1024;
@@ -60,6 +62,11 @@ const ENV_WHITELIST = [
   "SSL_CERT_FILE",
   "SSL_CERT_DIR",
   "CURL_CA_BUNDLE",
+  // Docker CLI 连接与上下文
+  "DOCKER_HOST",
+  "DOCKER_CONTEXT",
+  "DOCKER_TLS_VERIFY",
+  "DOCKER_CERT_PATH",
 ];
 
 export const PROXY_ENV_KEYS = [
@@ -130,7 +137,13 @@ export interface SpawnSpec {
   readonly cwd: string;
   readonly env?: NodeJS.ProcessEnv;
   readonly stdio?: SpawnOptions["stdio"];
+  readonly docker?: DockerBackendConfig;
 }
+
+const dockerProcesses = new WeakMap<
+  ChildProcess,
+  { readonly containerName: string; readonly dispose: () => void }
+>();
 
 /**
  * 真正要启动的命令。
@@ -163,6 +176,33 @@ export function prepareCommand(bin: string, args: readonly string[], env: NodeJS
 
 /** 直调可执行文件。`shell` 显式写 false：这是 C11 的检查点。 */
 export function spawnChild(bin: string, args: readonly string[], spec: SpawnSpec): ChildProcess {
+  if (spec.docker !== undefined) {
+    const plan = buildDockerRunPlan({
+      bin,
+      args,
+      cwd: spec.cwd,
+      env: spec.env ?? {},
+      docker: spec.docker,
+    });
+    const hostEnv = sanitizedEnv();
+    try {
+      const child = spawn(plan.bin, plan.args, {
+        cwd: spec.cwd,
+        stdio: spec.stdio ?? ["pipe", "pipe", "pipe"],
+        windowsHide: true,
+        detached: process.platform !== "win32",
+        shell: false,
+        env: hostEnv,
+      });
+      dockerProcesses.set(child, { containerName: plan.containerName, dispose: plan.dispose });
+      child.once("close", plan.dispose);
+      child.once("error", plan.dispose);
+      return child;
+    } catch (error) {
+      plan.dispose();
+      throw error;
+    }
+  }
   const env = spec.env ?? sanitizedEnv();
   const prepared = prepareCommand(bin, args, env);
   return spawn(prepared.bin, prepared.args, {
@@ -179,6 +219,19 @@ export function spawnChild(bin: string, args: readonly string[], spec: SpawnSpec
 /** 成组终止。Windows 上 `child.kill()` 只杀直接子进程，任务树会漏。 */
 export function terminateProcessTree(child: ChildProcess): void {
   if (child.pid === undefined || child.exitCode !== null) return;
+  const dockerMeta = dockerProcesses.get(child);
+  if (dockerMeta !== undefined) {
+    dockerProcesses.delete(child);
+    const cleaner = spawn("docker", ["rm", "-f", dockerMeta.containerName], {
+      windowsHide: true,
+      stdio: "ignore",
+      shell: false,
+      env: sanitizedEnv(),
+    });
+    cleaner.on("error", () => {
+      /* 容器可能已退出或 Docker 不可用 */
+    });
+  }
   if (process.platform === "win32") {
     const killer = spawn("taskkill", ["/PID", String(child.pid), "/T", "/F"], {
       windowsHide: true,
@@ -231,6 +284,7 @@ export interface RunOptions {
   readonly onStdout?: (chunk: string) => void;
   /** 输出来自系统命令行工具（where / reg），按控制台代码页解码，见 decodeConsoleOutput。 */
   readonly consoleEncoding?: boolean;
+  readonly docker?: DockerBackendConfig;
 }
 
 /**
@@ -249,7 +303,11 @@ export function runProcess(
     let overflowed = false;
     let settled = false;
     const maxBytes = options.maxOutputBytes ?? DEFAULT_MAX_OUTPUT_BYTES;
-    const child = spawnChild(bin, args, { cwd: options.cwd, env: options.env ?? sanitizedEnv() });
+    const child = spawnChild(bin, args, {
+      cwd: options.cwd,
+      env: options.env ?? sanitizedEnv(),
+      ...(options.docker === undefined ? {} : { docker: options.docker }),
+    });
     const out: Buffer[] = [];
     const stdoutDecoder = new StringDecoder("utf8");
     const err: Buffer[] = [];
@@ -563,6 +621,35 @@ function findInTree(root: string, exeName: string, depth: number): string | null
     if (hit !== null) return hit;
   }
   return null;
+}
+
+const DOCKER_DETECT_TTL_MS = 60_000;
+let dockerDetectCache: { at: number; value: DockerAvailability } | null = null;
+
+/** 探测 Docker Daemon 是否可用（带 60 秒缓存，`shell: false`，永不抛异常）。 */
+export async function detectDocker(force = false): Promise<DockerAvailability> {
+  if (!force && dockerDetectCache !== null && Date.now() - dockerDetectCache.at < DOCKER_DETECT_TTL_MS) {
+    return dockerDetectCache.value;
+  }
+  let availability: DockerAvailability;
+  try {
+    const result = await runProcess("docker", ["info", "--format", "{{.ServerVersion}}"], {
+      cwd: process.cwd(),
+      timeoutMs: 4000,
+    });
+    const version = result.stdout.trim();
+    if (result.code === 0 && !result.timedOut && !result.aborted && version !== "") {
+      availability = { available: true, version };
+    } else {
+      const reason = (result.stderr.trim() || result.stdout.trim() || "未检测到可用的 Docker 服务").slice(0, 200);
+      availability = { available: false, reason };
+    }
+  } catch (error) {
+    const msg = error instanceof Error ? error.message : String(error);
+    availability = { available: false, reason: msg.slice(0, 200) };
+  }
+  dockerDetectCache = { at: Date.now(), value: availability };
+  return availability;
 }
 
 /**

@@ -28,6 +28,7 @@ export class CommandProvider implements DelegationProvider {
       cwd: request.workspace,
       input: buildDelegationPrompt(request),
       ...(request.env === undefined ? {} : { env: request.env as NodeJS.ProcessEnv }),
+      ...(request.docker === undefined ? {} : { docker: request.docker }),
       idleTimeoutMs: 30 * 60 * 1000,
       onStdout: () => request.onEvent({ type: "trace", summary: "heartbeat" }),
       signal: request.signal,

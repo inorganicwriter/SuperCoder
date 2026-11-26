@@ -15,7 +15,7 @@ import { resultErr, type RpcResponse } from "../shared/protocol/rpc.js";
 import type { SessionEvent } from "../shared/session/events.js";
 import { ensureDir, writeJsonAtomic } from "./boot/atomic.js";
 import { DEFAULT_SETTINGS, SettingsStore, WorkspacesStore } from "./boot/config.js";
-import { warmUninstallCache } from "./boot/exec.js";
+import { detectDocker, warmUninstallCache } from "./boot/exec.js";
 import { fail, messageOf } from "./boot/failure.js";
 import { createLogger, type Logger } from "./boot/logger.js";
 import { acquireInstanceLock, type LockOutcome } from "./boot/lock.js";
@@ -155,17 +155,43 @@ export async function startHost(options: HostOptions = {}): Promise<RunningHost>
     },
   );
   const agentModels = new AgentModelPreferences(join(paths.home, "agent-models.json"));
-  const agentStatuses = async (force = false) => (await select.statuses(force)).map((agent) => {
-    const selectedModel = agentModels.get(agent.id);
-    const supportsPolicy = select.family(agent.id).entries.some((entry) => entry.provider instanceof AcpProvider || entry.provider instanceof CodexAppServerProvider);
-    return {
-      ...agent,
-      ...(selectedModel === undefined ? {} : { selectedModel }),
-      ...(supportsPolicy ? { permissionPolicy: agentPermissions.get(agent.id) } : {}),
-      sandbox: agentSandboxes.get(agent.id),
-      sandboxCapabilities: select.sandboxCapabilitiesOf(agent.id),
-    };
-  });
+  const agentStatuses = async (force = false) => {
+    const docker = await detectDocker(force);
+    return (await select.statuses(force)).map((agent) => {
+      const selectedModel = agentModels.get(agent.id);
+      const family = select.family(agent.id);
+      const supportsPolicy = family.entries.some((entry) => entry.provider instanceof AcpProvider || entry.provider instanceof CodexAppServerProvider);
+      const sandbox = agentSandboxes.get(agent.id);
+      const sandboxCapabilities = select.sandboxCapabilitiesOf(agent.id, { dockerAvailable: docker.available });
+      let effectiveAgent = agent;
+      if (sandbox.backend.kind === "docker" && sandboxCapabilities.docker === true && (!agent.installed || agent.level === 4)) {
+        const dockerEntry = family.entries.find(
+          (entry) =>
+            entry.provider.supportsSandbox?.network !== false &&
+            entry.provider.supportsSandbox?.env !== false,
+        );
+        if (dockerEntry !== undefined) {
+          const { reason: _ignoredReason, ...rest } = agent;
+          effectiveAgent = {
+            ...rest,
+            installed: true,
+            level: dockerEntry.level,
+            fragility: dockerEntry.provider.capabilities.fragility,
+            compat: dockerEntry.provider.capabilities.fragility !== "official",
+            capabilities: dockerEntry.provider.capabilities,
+            binaryPath: `docker://${sandbox.backend.docker?.image ?? ""}`,
+          };
+        }
+      }
+      return {
+        ...effectiveAgent,
+        ...(selectedModel === undefined ? {} : { selectedModel }),
+        ...(supportsPolicy ? { permissionPolicy: agentPermissions.get(agent.id) } : {}),
+        sandbox,
+        sandboxCapabilities,
+      };
+    });
+  };
   const runner = new DelegationRunner({
     select,
     locks,
@@ -173,6 +199,7 @@ export async function startHost(options: HostOptions = {}): Promise<RunningHost>
     sandboxes: agentSandboxes,
     networkProxy,
     worktreesDir: paths.worktreesDir,
+    detectDocker: () => detectDocker(false),
   });
   const models = new ModelCatalog({
     settings: settingsStore,

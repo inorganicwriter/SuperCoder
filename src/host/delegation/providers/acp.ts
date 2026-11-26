@@ -24,6 +24,7 @@ import type {
   ProviderPage,
   ProviderSessionSummary,
 } from "../../../shared/domain/provider.js";
+import type { DockerBackendConfig } from "../../../shared/domain/sandbox.js";
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -52,7 +53,11 @@ export interface AcpDeps {
   readonly env?: Readonly<Record<string, string>>;
   readonly capabilities?: ProviderCapabilities;
   readonly allowPermissions?: () => boolean;
-  readonly compileEnv?: () => Promise<{ readonly env: NodeJS.ProcessEnv; readonly dispose: () => void }>;
+  readonly compileEnv?: () => Promise<{
+    readonly env: NodeJS.ProcessEnv;
+    readonly docker?: DockerBackendConfig;
+    readonly dispose: () => void;
+  }>;
   readonly createTransport?: (workspace: string) => JsonRpcTransport;
   readonly detect?: () => Promise<ProviderInstallation>;
   readonly promptTimeoutMs?: number;
@@ -88,10 +93,12 @@ export class AcpProvider implements DelegationProvider {
     workspace: string,
     modelConfig?: AgentModelConfig,
     runtimeEnv?: Record<string, string | undefined>,
+    docker?: DockerBackendConfig,
   ): JsonRpcTransport {
     const modelOverrides: Record<string, string> = {};
     let args = this.extraArgs;
     let patchDir: string | undefined;
+    let effectiveDocker = docker;
     if (modelConfig) {
       modelOverrides["SUPERCODER_AGENT_API_KEY"] = modelConfig.apiKey;
       if (this.id === "deepseek-harness" && !this.deps.createTransport) {
@@ -103,7 +110,18 @@ export class AcpProvider implements DelegationProvider {
             { id: "acp", config: { provider: "supercoder", model: modelConfig.model } },
           ]), { mode: 0o600 });
         } catch (error) { rmSync(patchDir, { recursive: true, force: true }); throw error; }
-        args = [...this.extraArgs.slice(0, -1), "--profile", "acp", "--patch", patchFile];
+        let patchArg = patchFile;
+        if (effectiveDocker !== undefined) {
+          patchArg = "/tmp/supercoder-patch/profile.json";
+          effectiveDocker = {
+            ...effectiveDocker,
+            extraMounts: [
+              ...effectiveDocker.extraMounts,
+              { host: patchDir, container: "/tmp/supercoder-patch", readOnly: true },
+            ],
+          };
+        }
+        args = [...this.extraArgs.slice(0, -1), "--profile", "acp", "--patch", patchArg];
       } else if (this.id === "opencode") modelOverrides["OPENCODE_CONFIG_CONTENT"] = JSON.stringify({
         provider: { supercoder: { name: "SuperCoder", npm: "@ai-sdk/openai-compatible", options: { baseURL: modelConfig.baseUrl, apiKey: "{env:SUPERCODER_AGENT_API_KEY}" }, models: { [modelConfig.model]: { name: modelConfig.model, tool_call: true } } } },
       });
@@ -123,7 +141,16 @@ export class AcpProvider implements DelegationProvider {
           ? { env: sanitizedEnv({ ...this.deps.env, ...modelOverrides }) }
           : {};
     try {
-      const transport = this.deps.createTransport?.(workspace) ?? createStdioTransport(spawnChild(this.binary, args, { cwd: workspace || process.cwd(), ...envOption }), { allowPermissions: this.deps.allowPermissions ?? (() => false) });
+      const transport =
+        this.deps.createTransport?.(workspace) ??
+        createStdioTransport(
+          spawnChild(this.binary, args, {
+            cwd: workspace || process.cwd(),
+            ...envOption,
+            ...(effectiveDocker === undefined ? {} : { docker: effectiveDocker }),
+          }),
+          { allowPermissions: this.deps.allowPermissions ?? (() => false) },
+        );
       if (!patchDir) return transport;
       const dir = patchDir;
       return { ...transport, close: () => { try { transport.close(); } finally { rmSync(dir, { recursive: true, force: true }); } } };
@@ -141,10 +168,11 @@ export class AcpProvider implements DelegationProvider {
 
   async listModels(workspace: string): Promise<ProviderModel[]> {
     const compiled = this.deps.createTransport === undefined && this.deps.compileEnv ? await this.deps.compileEnv() : undefined;
-    const transport = this.transport(workspace, undefined, compiled?.env);
+    const transport = this.transport(workspace, undefined, compiled?.env, compiled?.docker);
+    const rpcCwd = compiled?.docker !== undefined ? "/workspace" : workspace;
     try {
       await this.initialize(transport);
-      const session = asRecord(await transport.request("session/new", { cwd: workspace, mcpServers: [] }));
+      const session = asRecord(await transport.request("session/new", { cwd: rpcCwd, mcpServers: [] }));
       const options = Array.isArray(session["configOptions"]) ? session["configOptions"].map(asRecord) : [];
       const model = options.find((option) => option["category"] === "model" || option["id"] === "model");
       if (model) {
@@ -199,11 +227,12 @@ export class AcpProvider implements DelegationProvider {
 
   async listSessions(workspace: string, page: ProviderPage): Promise<ProviderSessionSummary[]> {
     const compiled = this.deps.createTransport === undefined && this.deps.compileEnv ? await this.deps.compileEnv() : undefined;
-    const transport = this.transport(workspace, undefined, compiled?.env);
+    const transport = this.transport(workspace, undefined, compiled?.env, compiled?.docker);
+    const rpcCwd = compiled?.docker !== undefined ? "/workspace" : workspace;
     try {
       const capabilities = await this.initialize(transport);
       if (asRecord(capabilities["sessionCapabilities"])["list"] === undefined) return [];
-      return (await this.sessions(transport, workspace, page.offset + page.limit)).slice(page.offset, page.offset + page.limit);
+      return (await this.sessions(transport, rpcCwd, page.offset + page.limit)).slice(page.offset, page.offset + page.limit);
     } finally {
       transport.close();
       compiled?.dispose();
@@ -212,7 +241,7 @@ export class AcpProvider implements DelegationProvider {
 
   async readSession(sessionId: string, page: ProviderPage): Promise<DelegationEvent[]> {
     const compiled = this.deps.createTransport === undefined && this.deps.compileEnv ? await this.deps.compileEnv() : undefined;
-    const transport = this.transport(process.cwd(), undefined, compiled?.env);
+    const transport = this.transport(process.cwd(), undefined, compiled?.env, compiled?.docker);
     try {
       const capabilities = await this.initialize(transport);
       const sessionCapabilities = asRecord(capabilities["sessionCapabilities"]);
@@ -242,7 +271,8 @@ export class AcpProvider implements DelegationProvider {
     const startedAt = Date.now();
     if (request.modelConfig && this.id !== "opencode" && this.id !== "deepseek-harness") return { status: "failed", diagnostic: diagnostic("handshake", "protocol", "此 ACP Agent 不支持注入 SuperCoder 模型档案"), durationMs: 0 };
     // 只读请求照常执行：可写权限本就更高，ACP 没有可强制的只读沙箱，不因此拒绝任务。
-    const transport = this.transport(request.workspace, request.modelConfig, request.env);
+    const transport = this.transport(request.workspace, request.modelConfig, request.env, request.docker);
+    const rpcCwd = request.docker !== undefined ? "/workspace" : request.workspace;
     const candidates: AnswerCandidate[] = [];
     // ACP 的 chunk 是增量：拼成一条完整答案再交给  选择，否则只取到第一段。
     let answerBuffer = "";
@@ -296,7 +326,7 @@ export class AcpProvider implements DelegationProvider {
       if (request.resumeSessionId && !resumeMethod) throw new Error("此 Agent 未声明支持恢复会话");
 
       const created = (await transport.request(request.resumeSessionId ? resumeMethod! : "session/new", {
-        cwd: request.workspace,
+        cwd: rpcCwd,
         mcpServers: [],
         ...(request.resumeSessionId === undefined ? {} : { sessionId: request.resumeSessionId }),
       })) as { sessionId?: string; configOptions?: Array<{ id?: string; category?: string }>; models?: unknown };

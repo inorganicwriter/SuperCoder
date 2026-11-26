@@ -11,7 +11,11 @@ import { AgentNetworkProxy } from "../../src/host/delegation/network-proxy.js";
 import { AgentSandboxPreferences } from "../../src/host/delegation/sandbox-preferences.js";
 import { ProviderSelect } from "../../src/host/delegation/provider-select.js";
 import type { DelegationProvider, ProviderCapabilities } from "../../src/shared/domain/provider.js";
-import { AgentSandboxProfileSchema } from "../../src/shared/domain/sandbox.js";
+import {
+  AgentSandboxProfileSchema,
+  hasActiveProcessSandboxOverrides,
+  isDefaultSandboxProfile,
+} from "../../src/shared/domain/sandbox.js";
 import { makeTempHome } from "../helpers/temp.js";
 
 const cleanups: Array<() => Promise<void>> = [];
@@ -193,5 +197,126 @@ describe("AgentSandboxPreferences & buildSanitizedEnv", () => {
     await expect(select.resolveCandidates("kimi-code", { requireProcessSandbox: true })).rejects.toMatchObject({
       code: "unsupported",
     });
+  });
+
+  it("compiles docker container backend with container-only env, gateway proxy URL, mounts, and offline coercion", async () => {
+    const temp = makeTempHome("sc-docker-prefs-");
+    const proxy = new AgentNetworkProxy();
+    cleanups.push(async () => {
+      await proxy.close();
+      temp.cleanup();
+    });
+
+    vi.stubEnv("HTTP_PROXY", "http://host-proxy:8888");
+    const secrets = new SecretStore(temp.paths.secretsFile, createTestBackend());
+    const prefs = new AgentSandboxPreferences({
+      file: join(temp.home, "agent-sandboxes.json"),
+      secrets,
+      sandboxesDir: temp.paths.sandboxesDir,
+    });
+
+    const profile = prefs.set("codex", AgentSandboxProfileSchema.parse({
+      network: {
+        mode: "proxy",
+        proxyUrl: "http://127.0.0.1:7890",
+        allowlist: ["api.openai.com"],
+        caCertPath: "/host/ca.pem",
+      },
+      env: {
+        set: { NON_SECRET: "ok", API_KEY: "secret-docker" },
+        unset: ["HTTP_PROXY", "NON_SECRET"],
+        prependPath: ["/opt/tools/bin"],
+        isolatedHome: true,
+      },
+      backend: {
+        kind: "docker",
+        docker: {
+          image: "ghcr.io/supercoder/codex:latest",
+          networkIsolation: "proxy-only",
+          memoryLimit: "2g",
+          cpuLimit: 2,
+          readOnlyRoot: true,
+          extraMounts: [{ host: "/host/docs", container: "/mnt/docs", readOnly: true }],
+        },
+      },
+    }));
+
+    expect(hasActiveProcessSandboxOverrides(profile)).toBe(true);
+    expect(isDefaultSandboxProfile(profile)).toBe(false);
+
+    const compiled = await prefs.compileEnv("codex", {
+      proxy,
+      extra: { SUPERCODER_AGENT_API_KEY: "model-secret", HTTP_PROXY: "http://127.0.0.1:9999" },
+    });
+    expect(compiled.docker).toBeDefined();
+    expect(compiled.docker?.networkIsolation).toBe("proxy-only");
+    expect(compiled.docker?.extraMounts).toEqual(
+      expect.arrayContaining([
+        { host: "/host/docs", container: "/mnt/docs", readOnly: true },
+        expect.objectContaining({ container: "/home/supercoder", readOnly: false }),
+        { host: "/host/ca.pem", container: "/etc/supercoder/ca.pem", readOnly: true },
+      ]),
+    );
+    // 宿主 Windows PATH/SystemRoot 等不得进入容器 env
+    expect(compiled.env["SystemRoot"]).toBeUndefined();
+    expect(compiled.env["HOME"]).toBe("/home/supercoder");
+    expect(compiled.env["NODE_EXTRA_CA_CERTS"]).toBe("/etc/supercoder/ca.pem");
+    expect(compiled.env["API_KEY"]).toBe("secret-docker");
+    expect(compiled.env["NON_SECRET"]).toBeUndefined();
+    expect(compiled.env["PATH"]?.startsWith("/opt/tools/bin:/usr/local/sbin:")).toBe(true);
+    expect(compiled.env["SUPERCODER_AGENT_API_KEY"]).toBe("model-secret");
+    // options.extra 传入的回环代理也会被改写为 host.docker.internal
+    expect(compiled.env["HTTP_PROXY"]).toBe("http://host.docker.internal:9999");
+    expect(compiled.env["HTTPS_PROXY"]).toMatch(/^http:\/\/codex:[^@]+@host\.docker\.internal:\d+$/);
+    expect(proxy.dockerPort).toBeGreaterThan(0);
+    compiled.dispose();
+
+    // 离线网络策略自动收敛容器为 --network none
+    prefs.set("claude-code", AgentSandboxProfileSchema.parse({
+      network: { mode: "offline" },
+      backend: {
+        kind: "docker",
+        docker: { image: "ghcr.io/supercoder/claude:latest", networkIsolation: "proxy-only" },
+      },
+    }));
+    const offlineDocker = await prefs.compileEnv("claude-code", { proxy });
+    expect(offlineDocker.docker?.networkIsolation).toBe("none");
+    expect(offlineDocker.env["HTTP_PROXY"]).toBeUndefined();
+    offlineDocker.dispose();
+  });
+
+  it("allows container-only resolution when allowDockerFallback is enabled without host CLI installed", async () => {
+    const select = new ProviderSelect([
+      {
+        id: "container-agent",
+        label: "Container Agent",
+        entries: [
+          {
+            level: 3,
+            provider: {
+              ...stubProvider("container-acp", { env: true, network: true, worktree: true }),
+              detect: async () => ({ installed: false, reason: "not installed on host" }),
+            },
+          },
+        ],
+        probe: {
+          providerId: "container-agent",
+          locate: async () => null,
+          listSessions: async () => [],
+          readSession: async () => [],
+        },
+      },
+    ]);
+
+    await expect(
+      select.resolveCandidates("container-agent", { requireProcessSandbox: true }),
+    ).rejects.toMatchObject({ code: "not_found" });
+
+    const fallback = await select.resolveCandidates("container-agent", {
+      requireProcessSandbox: true,
+      allowDockerFallback: true,
+    });
+    expect(fallback).toHaveLength(1);
+    expect(fallback[0]?.provider.id).toBe("container-acp");
   });
 });

@@ -17,8 +17,10 @@ import {
   isSensitiveEnvKey,
   matchHostPattern,
   type AgentSandboxProfile,
+  type DockerBackendConfig,
 } from "../../shared/domain/sandbox.js";
 import { ensureDir, writeJsonAtomic } from "../boot/atomic.js";
+import { rewriteProxyUrlForDocker } from "../boot/docker-runtime.js";
 import { buildSanitizedEnv, PROXY_ENV_KEYS } from "../boot/exec.js";
 import { fail } from "../boot/failure.js";
 import type { SecretStore } from "../boot/secrets.js";
@@ -33,6 +35,7 @@ const PROXY_ONLY_KEYS = [
   "https_proxy",
   "all_proxy",
 ] as const;
+const DEFAULT_CONTAINER_PATH = "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin";
 
 export interface AgentSandboxPreferencesDeps {
   readonly file: string;
@@ -42,6 +45,7 @@ export interface AgentSandboxPreferencesDeps {
 
 export interface CompiledSandboxEnv {
   readonly env: NodeJS.ProcessEnv;
+  readonly docker?: DockerBackendConfig;
   readonly dispose: () => void;
 }
 
@@ -136,6 +140,26 @@ export class AgentSandboxPreferences {
 
     const proxyUrl = parsed.network.proxyUrl?.trim();
     const caCertPath = parsed.network.caCertPath?.trim();
+    const backendDocker = parsed.backend.docker;
+    const normalizedBackend =
+      parsed.backend.kind === "docker" && backendDocker !== undefined
+        ? {
+            kind: "docker" as const,
+            docker: {
+              image: backendDocker.image.trim(),
+              networkIsolation: backendDocker.networkIsolation,
+              ...(backendDocker.memoryLimit?.trim() ? { memoryLimit: backendDocker.memoryLimit.trim() } : {}),
+              ...(backendDocker.cpuLimit === undefined ? {} : { cpuLimit: backendDocker.cpuLimit }),
+              readOnlyRoot: backendDocker.readOnlyRoot,
+              extraMounts: backendDocker.extraMounts.map((mount) => ({
+                host: mount.host.trim(),
+                container: mount.container.trim(),
+                readOnly: mount.readOnly,
+              })),
+            },
+          }
+        : { kind: "process" as const };
+
     const normalized: AgentSandboxProfile = AgentSandboxProfileSchema.parse({
       network: {
         mode: parsed.network.mode,
@@ -155,6 +179,7 @@ export class AgentSandboxPreferences {
       workspace: {
         isolation: parsed.workspace.isolation,
       },
+      backend: normalizedBackend,
     });
 
     const all = this.readAll();
@@ -201,6 +226,9 @@ export class AgentSandboxPreferences {
     },
   ): Promise<CompiledSandboxEnv> {
     const profile = this.get(agentId);
+    if (profile.backend.kind === "docker" && profile.backend.docker !== undefined) {
+      return this.compileDockerEnv(agentId, profile, options);
+    }
     const { network, env } = profile;
 
     const unset = new Set<string>(env.unset);
@@ -290,6 +318,117 @@ export class AgentSandboxPreferences {
 
     return {
       env: compiled,
+      dispose: () => {
+        disposeScope?.();
+      },
+    };
+  }
+
+  private async compileDockerEnv(
+    agentId: string,
+    profile: AgentSandboxProfile,
+    options: {
+      readonly proxy: AgentNetworkProxy;
+      readonly extra?: Readonly<Record<string, string>>;
+      readonly onBlocked?: (host: string) => void;
+    },
+  ): Promise<CompiledSandboxEnv> {
+    const dockerCfg = profile.backend.docker!;
+    const { network, env } = profile;
+    const effectiveIsolation = network.mode === "offline" ? "none" : dockerCfg.networkIsolation;
+    const containerEnv: Record<string, string> = { ...env.set };
+    const extraMounts = [...dockerCfg.extraMounts];
+
+    for (const key of env.secretKeys) {
+      const value = this.deps.secrets.get(secretKeyName(agentId, key));
+      if (value !== null) containerEnv[key] = value;
+    }
+
+    // 先处理用户显式清理的键，再注入托管的隔离目录、CA 证书、代理路由与运行期额外变量。
+    for (const key of env.unset) {
+      delete containerEnv[key];
+    }
+
+    if (env.isolatedHome) {
+      const homeRoot = join(this.deps.sandboxesDir, sanitizeHomeDirSegment(agentId), "home");
+      ensureDir(homeRoot);
+      ensureDir(join(homeRoot, ".config"));
+      ensureDir(join(homeRoot, ".local", "share"));
+      ensureDir(join(homeRoot, ".local", "state"));
+      ensureDir(join(homeRoot, ".codex"));
+      extraMounts.push({ host: homeRoot, container: "/home/supercoder", readOnly: false });
+      containerEnv["HOME"] = "/home/supercoder";
+      containerEnv["XDG_CONFIG_HOME"] = "/home/supercoder/.config";
+      containerEnv["XDG_DATA_HOME"] = "/home/supercoder/.local/share";
+      containerEnv["XDG_STATE_HOME"] = "/home/supercoder/.local/state";
+      containerEnv["CODEX_HOME"] = "/home/supercoder/.codex";
+    }
+
+    if (network.caCertPath && network.caCertPath.trim() !== "" && effectiveIsolation !== "none") {
+      extraMounts.push({
+        host: network.caCertPath.trim(),
+        container: "/etc/supercoder/ca.pem",
+        readOnly: true,
+      });
+      containerEnv["NODE_EXTRA_CA_CERTS"] = "/etc/supercoder/ca.pem";
+      containerEnv["SSL_CERT_FILE"] = "/etc/supercoder/ca.pem";
+      containerEnv["CURL_CA_BUNDLE"] = "/etc/supercoder/ca.pem";
+    }
+
+    let disposeScope: (() => void) | null = null;
+    if (effectiveIsolation !== "none") {
+      const routeViaGateway =
+        effectiveIsolation === "proxy-only" ||
+        network.mode === "proxy" ||
+        network.mode === "inherit" ||
+        network.allowlist.length > 0 ||
+        network.denylist.length > 0;
+      if (routeViaGateway) {
+        await options.proxy.startDockerGateway();
+        const scope = options.proxy.registerScope({
+          agentId,
+          network,
+          forDocker: true,
+          ...(options.onBlocked === undefined ? {} : { onBlocked: options.onBlocked }),
+        });
+        disposeScope = scope.dispose;
+        for (const key of PROXY_ONLY_KEYS) {
+          containerEnv[key] = scope.proxyUrl;
+        }
+        const noProxyList = dedupeStrings([
+          "host.docker.internal",
+          "localhost",
+          "127.0.0.1",
+          ...(effectiveIsolation === "bridge" ? network.noProxy : []),
+        ]);
+        const joined = noProxyList.join(",");
+        containerEnv["NO_PROXY"] = joined;
+        containerEnv["no_proxy"] = joined;
+      } else if (network.noProxy.length > 0) {
+        const joined = network.noProxy.join(",");
+        containerEnv["NO_PROXY"] = joined;
+        containerEnv["no_proxy"] = joined;
+      }
+    }
+
+    const proxyKeySet = new Set<string>(PROXY_ONLY_KEYS);
+    for (const [key, value] of Object.entries(options.extra ?? {})) {
+      containerEnv[key] = proxyKeySet.has(key) ? rewriteProxyUrlForDocker(value) : value;
+    }
+
+    if (env.prependPath.length > 0) {
+      const prefix = env.prependPath.join(":");
+      const current = containerEnv["PATH"] ?? DEFAULT_CONTAINER_PATH;
+      containerEnv["PATH"] = `${prefix}:${current}`;
+    }
+
+    return {
+      env: containerEnv,
+      docker: {
+        ...dockerCfg,
+        networkIsolation: effectiveIsolation,
+        extraMounts,
+      },
       dispose: () => {
         disposeScope?.();
       },
