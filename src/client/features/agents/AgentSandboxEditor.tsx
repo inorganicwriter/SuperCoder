@@ -15,7 +15,7 @@ import {
 } from "../../../shared/domain/sandbox.js";
 import { t } from "../../locale/index.js";
 import { Select } from "../../render/Select.js";
-import { useStore } from "../../render/SessionProvider.js";
+import { useClientState, useStore } from "../../render/SessionProvider.js";
 import styles from "./agents.module.css";
 
 interface DraftState {
@@ -207,13 +207,18 @@ function buildProfileFromDraft(
 
 export function AgentSandboxEditor({ agent }: { readonly agent: ProviderStatus }): JSX.Element {
   const store = useStore();
+  const { activeWorkspaceId } = useClientState();
   const savedProfile = agent.sandbox ?? DEFAULT_AGENT_SANDBOX_PROFILE;
+  const savedScope = agent.sandboxScope ?? "global";
   const savedKey = JSON.stringify(savedProfile);
   const capabilities = agent.sandboxCapabilities ?? { env: true, network: true, worktree: true, docker: false };
   const processUnsupported = !capabilities.network && !capabilities.env;
   const dockerAvailable = capabilities.docker === true;
   const presetDomains = AGENT_ALLOWLIST_PRESETS[agent.id];
 
+  const [scope, setScope] = useState<"global" | "workspace">(() =>
+    activeWorkspaceId === "" ? "global" : savedScope,
+  );
   const [draft, setDraft] = useState<DraftState>(() => toDraft(savedProfile));
   const [removedSecrets, setRemovedSecrets] = useState<string[]>([]);
   const [saving, setSaving] = useState(false);
@@ -224,10 +229,11 @@ export function AgentSandboxEditor({ agent }: { readonly agent: ProviderStatus }
   const [testResult, setTestResult] = useState<SandboxTestResult | null>(null);
 
   useEffect(() => {
+    setScope(activeWorkspaceId === "" ? "global" : savedScope);
     setDraft(toDraft(JSON.parse(savedKey) as AgentSandboxProfile));
     setRemovedSecrets([]);
     setLocalError(null);
-  }, [savedKey]);
+  }, [savedKey, savedScope, activeWorkspaceId]);
 
   const handleSave = async (): Promise<void> => {
     setLocalError(null);
@@ -238,7 +244,8 @@ export function AgentSandboxEditor({ agent }: { readonly agent: ProviderStatus }
       return;
     }
     setSaving(true);
-    const ok = await store.setAgentSandbox(agent.id, built.sandbox, built.secretValues);
+    const workspaceOption = scope === "workspace" && activeWorkspaceId !== "" ? { workspaceId: activeWorkspaceId } : undefined;
+    const ok = await store.setAgentSandbox(agent.id, built.sandbox, built.secretValues, workspaceOption);
     setSaving(false);
     if (ok) {
       setRemovedSecrets([]);
@@ -253,10 +260,28 @@ export function AgentSandboxEditor({ agent }: { readonly agent: ProviderStatus }
     const clearSecrets: Record<string, string> = {};
     for (const key of savedProfile.env.secretKeys) clearSecrets[key] = "";
     setSaving(true);
-    const ok = await store.setAgentSandbox(agent.id, DEFAULT_AGENT_SANDBOX_PROFILE, clearSecrets);
+    const workspaceOption = scope === "workspace" && activeWorkspaceId !== "" ? { workspaceId: activeWorkspaceId } : undefined;
+    const ok = await store.setAgentSandbox(agent.id, DEFAULT_AGENT_SANDBOX_PROFILE, clearSecrets, workspaceOption);
     setSaving(false);
     if (ok) {
       setDraft(toDraft(DEFAULT_AGENT_SANDBOX_PROFILE));
+      setRemovedSecrets([]);
+      setSavedFlag(true);
+    }
+  };
+
+  const handleClearWorkspaceOverride = async (): Promise<void> => {
+    if (activeWorkspaceId === "") return;
+    setLocalError(null);
+    setSavedFlag(false);
+    setTestResult(null);
+    setSaving(true);
+    const ok = await store.setAgentSandbox(agent.id, DEFAULT_AGENT_SANDBOX_PROFILE, undefined, {
+      workspaceId: activeWorkspaceId,
+      clearWorkspaceOverride: true,
+    });
+    setSaving(false);
+    if (ok) {
       setRemovedSecrets([]);
       setSavedFlag(true);
     }
@@ -270,7 +295,8 @@ export function AgentSandboxEditor({ agent }: { readonly agent: ProviderStatus }
       return;
     }
     setTesting(true);
-    const result = await store.testAgentSandbox(agent.id, testUrl.trim(), built.sandbox);
+    const targetWorkspace = scope === "workspace" && activeWorkspaceId !== "" ? activeWorkspaceId : undefined;
+    const result = await store.testAgentSandbox(agent.id, testUrl.trim(), built.sandbox, targetWorkspace);
     setTesting(false);
     if (result !== null) setTestResult(result);
   };
@@ -279,6 +305,36 @@ export function AgentSandboxEditor({ agent }: { readonly agent: ProviderStatus }
     <div className={styles.sandboxBox}>
       <div className={styles.sandboxHeader}>
         <span className={styles.sandboxTitle}>{t("agent.sandboxTitle")}</span>
+        {activeWorkspaceId !== "" ? (
+          <div className={styles.sandboxHeaderRight}>
+            {savedScope === "workspace" ? (
+              <>
+                <span className={styles.via}>{t("agent.sandboxScopeBadge")}</span>
+                <button
+                  type="button"
+                  className={styles.link}
+                  disabled={saving}
+                  onClick={() => void handleClearWorkspaceOverride()}
+                >
+                  {t("agent.sandboxClearOverride")}
+                </button>
+              </>
+            ) : (
+              <Select
+                value={scope}
+                ariaLabel={t("agent.sandboxScopeGlobal")}
+                options={[
+                  { value: "global", label: t("agent.sandboxScopeGlobal") },
+                  { value: "workspace", label: t("agent.sandboxScopeWorkspace") },
+                ]}
+                onChange={(next) => {
+                  setSavedFlag(false);
+                  setScope(next as "global" | "workspace");
+                }}
+              />
+            )}
+          </div>
+        ) : null}
       </div>
 
       {processUnsupported ? (

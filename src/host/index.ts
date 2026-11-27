@@ -160,13 +160,17 @@ export async function startHost(options: HostOptions = {}): Promise<RunningHost>
     },
   );
   const agentModels = new AgentModelPreferences(join(paths.home, "agent-models.json"));
-  const agentStatuses = async (force = false) => {
+  const agentStatuses = async (force = false, workspaceId?: string) => {
     const docker = await detectDocker(force);
     return (await select.statuses(force)).map((agent) => {
       const selectedModel = agentModels.get(agent.id);
       const family = select.family(agent.id);
       const supportsPolicy = family.entries.some((entry) => entry.provider instanceof AcpProvider || entry.provider instanceof CodexAppServerProvider);
-      const sandbox = agentSandboxes.get(agent.id);
+      const sandbox = agentSandboxes.get(agent.id, workspaceId);
+      const sandboxScope: "global" | "workspace" =
+        workspaceId !== undefined && agentSandboxes.hasWorkspaceOverride(agent.id, workspaceId)
+          ? "workspace"
+          : "global";
       const sandboxCapabilities = select.sandboxCapabilitiesOf(agent.id, { dockerAvailable: docker.available });
       let effectiveAgent = agent;
       if (sandbox.backend.kind === "docker" && sandboxCapabilities.docker === true && (!agent.installed || agent.level === 4)) {
@@ -193,6 +197,7 @@ export async function startHost(options: HostOptions = {}): Promise<RunningHost>
         ...(selectedModel === undefined ? {} : { selectedModel }),
         ...(supportsPolicy ? { permissionPolicy: agentPermissions.get(agent.id) } : {}),
         sandbox,
+        sandboxScope,
         sandboxCapabilities,
       };
     });
@@ -289,6 +294,7 @@ export async function startHost(options: HostOptions = {}): Promise<RunningHost>
     settings: settingsStore,
     secrets,
     logger,
+    networkProxy,
     ...(options.fetchImpl === undefined ? {} : { fetchImpl: options.fetchImpl }),
   });
   const externalTools = createMcpToolSource(mcp, logger);
@@ -304,8 +310,8 @@ export async function startHost(options: HostOptions = {}): Promise<RunningHost>
     logger,
     language,
     workspacePathOf: (session) => workspacePathOf(session.meta.workspace),
-    canParallelDispatch: (agentId, mode) =>
-      mode === "read-only" || agentSandboxes.get(agentId).workspace.isolation === "worktree",
+    canParallelDispatch: (agentId, mode, workspaceId) =>
+      mode === "read-only" || agentSandboxes.get(agentId, workspaceId).workspace.isolation === "worktree",
     sharedContext: (session) => sharedContextFor(sessions.capsules(session.meta.workspace), session.sessionId, session.meta.createdAt),
   });
 
@@ -539,10 +545,10 @@ export async function startHost(options: HostOptions = {}): Promise<RunningHost>
   });
 
   // —— agent ——
-  router.register("agent.list", () => agentStatuses(false));
-  router.register("agent.refresh", async () => {
+  router.register("agent.list", (params) => agentStatuses(false, params.workspaceId));
+  router.register("agent.refresh", async (params) => {
     select.invalidate();
-    return agentStatuses(true);
+    return agentStatuses(true, params.workspaceId);
   });
   router.register("agent.model.set", (params) => {
     select.family(params.agentId);
@@ -560,7 +566,17 @@ export async function startHost(options: HostOptions = {}): Promise<RunningHost>
   router.register("agent.sandbox.set", (params) => {
     select.family(params.agentId);
     try {
-      const saved = agentSandboxes.set(params.agentId, params.sandbox, params.secretValues);
+      if (params.clearWorkspaceOverride === true && params.workspaceId !== undefined) {
+        const fallback = agentSandboxes.clearWorkspaceOverride(params.agentId, params.workspaceId);
+        select.invalidate();
+        return fallback;
+      }
+      const saved = agentSandboxes.set(
+        params.agentId,
+        params.sandbox,
+        params.secretValues,
+        params.workspaceId === undefined ? undefined : { workspaceId: params.workspaceId },
+      );
       select.invalidate();
       return saved;
     } catch (error) {
@@ -569,7 +585,7 @@ export async function startHost(options: HostOptions = {}): Promise<RunningHost>
   });
   router.register("agent.sandbox.test", async (params) => {
     select.family(params.agentId);
-    const profile = params.sandbox ?? agentSandboxes.get(params.agentId);
+    const profile = params.sandbox ?? agentSandboxes.get(params.agentId, params.workspaceId);
     if (profile.backend.kind === "docker" && profile.backend.docker !== undefined) {
       const docker = await detectDocker(true);
       if (!docker.available) {
@@ -609,13 +625,18 @@ export async function startHost(options: HostOptions = {}): Promise<RunningHost>
   });
   router.register("agent.sandbox.allowHost", (params) => {
     select.family(params.agentId);
-    const updated = agentSandboxes.allowHost(params.agentId, params.host);
+    const updated = agentSandboxes.allowHost(params.agentId, params.host, params.workspaceId);
     select.invalidate();
     return updated;
   });
   router.register("agent.sandbox.lockAllowlist", (params) => {
     select.family(params.agentId);
-    const updated = agentSandboxes.lockAllowlist(params.agentId, params.hosts, params.merge ?? true);
+    const updated = agentSandboxes.lockAllowlist(
+      params.agentId,
+      params.hosts,
+      params.merge ?? true,
+      params.workspaceId,
+    );
     select.invalidate();
     return updated;
   });

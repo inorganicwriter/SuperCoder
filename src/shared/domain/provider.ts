@@ -62,6 +62,7 @@ export const ProviderStatusSchema = z.object({
   selectedModel: z.string().optional(),
   permissionPolicy: z.enum(["allow", "deny"]).optional(),
   sandbox: AgentSandboxProfileSchema.optional(),
+  sandboxScope: z.enum(["global", "workspace"]).optional(),
   sandboxCapabilities: SandboxCapabilitiesSchema.optional(),
 });
 export type ProviderStatus = z.infer<typeof ProviderStatusSchema>;

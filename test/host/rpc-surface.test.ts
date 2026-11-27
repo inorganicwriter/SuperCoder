@@ -241,6 +241,39 @@ describe("RPC Callable Surface", () => {
       });
       expect(offlineLockErr.code).toBe("denied");
 
+      // Item 4: 工作区级 Sandbox 覆盖与清除
+      await fixture.call("agent.sandbox.set", {
+        agentId: "codex",
+        workspaceId: workspace.id,
+        sandbox: {
+          network: { mode: "direct", noProxy: [], allowlist: ["ws-only.example.com"], denylist: [] },
+          env: { set: { WS_ENV: "yes" }, secretKeys: [], unset: [], prependPath: [], isolatedHome: false },
+          workspace: { isolation: "shared" },
+          backend: { kind: "process" },
+        },
+      });
+      const wsAgents = await fixture.call("agent.list", { workspaceId: workspace.id });
+      const wsCodex = wsAgents.find((a) => a.id === "codex");
+      expect(wsCodex?.sandboxScope).toBe("workspace");
+      expect(wsCodex?.sandbox?.env.set["WS_ENV"]).toBe("yes");
+
+      const globalAgents = await fixture.call("agent.list", {});
+      expect(globalAgents.find((a) => a.id === "codex")?.sandboxScope).toBe("global");
+
+      await fixture.call("agent.sandbox.set", {
+        agentId: "codex",
+        workspaceId: workspace.id,
+        clearWorkspaceOverride: true,
+        sandbox: {
+          network: { mode: "inherit", noProxy: [], allowlist: [], denylist: [] },
+          env: { set: {}, secretKeys: [], unset: [], prependPath: [], isolatedHome: false },
+          workspace: { isolation: "shared" },
+          backend: { kind: "process" },
+        },
+      });
+      const revertedAgents = await fixture.call("agent.list", { workspaceId: workspace.id });
+      expect(revertedAgents.find((a) => a.id === "codex")?.sandboxScope).toBe("global");
+
       const dupErr = await fixture.errorOf("agent.custom.upsert", {
         agent: { id: "codex", label: "Dup", protocol: "acp", binary: "codex", args: [], enabled: true },
       });

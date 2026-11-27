@@ -168,8 +168,9 @@ export class ClientStore {
         activeId = workspaces.activeId !== "" ? workspaces.activeId : (workspaces.items[0]?.id ?? "");
       }
       this.patch({ workspaces: workspaces.items, activeWorkspaceId: activeId });
+      const wsParam = activeId !== "" ? { workspaceId: activeId } : {};
       const [agents, customAgents, models, servers] = await Promise.all([
-        this.connection.rpc("agent.list", {}),
+        this.connection.rpc("agent.list", wsParam),
         this.connection.rpc("agent.custom.list", {}),
         this.connection.rpc("model.list", {}),
         this.connection.rpc("mcp.list", {}),
@@ -200,7 +201,11 @@ export class ClientStore {
     this.patch({ activeWorkspaceId: id, activeSessionId: null, view: null, tasks: [], capsules: [] });
     this.connection.unsubscribe();
     await this.connection.rpc("workspace.activate", { id }).catch(() => undefined);
-    await this.loadSessions(id);
+    const [agents] = await Promise.all([
+      this.connection.rpc("agent.list", id !== "" ? { workspaceId: id } : {}).catch(() => null),
+      this.loadSessions(id),
+    ]);
+    if (agents !== null) this.patch({ agents });
   }
 
   async addWorkspace(path: string): Promise<void> {
@@ -479,9 +484,13 @@ export class ClientStore {
     return true;
   }
 
+  private agentListParams(): { workspaceId?: string } {
+    return this.state.activeWorkspaceId !== "" ? { workspaceId: this.state.activeWorkspaceId } : {};
+  }
+
   async refreshAgents(): Promise<void> {
     try {
-      this.patch({ agents: await this.connection.rpc("agent.refresh", {}) });
+      this.patch({ agents: await this.connection.rpc("agent.refresh", this.agentListParams()) });
     } catch (error) {
       this.fail(error);
     }
@@ -490,12 +499,12 @@ export class ClientStore {
   async setAgentModel(agentId: string, model: string | null): Promise<void> {
     try {
       await this.connection.rpc("agent.model.set", { agentId, model });
-      this.patch({ agents: await this.connection.rpc("agent.list", {}) });
+      this.patch({ agents: await this.connection.rpc("agent.list", this.agentListParams()) });
     } catch (error) { this.fail(error); }
   }
 
   async setAgentPermission(agentId: string, policy: "allow" | "deny"): Promise<void> {
-    try { await this.connection.rpc("agent.permission.set", { agentId, policy }); this.patch({ agents: await this.connection.rpc("agent.list", {}) }); }
+    try { await this.connection.rpc("agent.permission.set", { agentId, policy }); this.patch({ agents: await this.connection.rpc("agent.list", this.agentListParams()) }); }
     catch (error) { this.fail(error); }
   }
 
@@ -508,17 +517,22 @@ export class ClientStore {
     agentId: string,
     sandbox: AgentSandboxProfile,
     secretValues?: Record<string, string>,
+    options?: { readonly workspaceId?: string; readonly clearWorkspaceOverride?: boolean },
   ): Promise<boolean> {
     this.clearError();
     try {
-      await this.connection.rpc("agent.sandbox.set", {
-        agentId,
-        sandbox,
-        ...(secretValues === undefined || Object.keys(secretValues).length === 0
-          ? {}
-          : { secretValues }),
-      });
-      this.patch({ agents: await this.connection.rpc("agent.list", {}) });
+      const params: {
+        agentId: string;
+        sandbox: AgentSandboxProfile;
+        secretValues?: Record<string, string>;
+        workspaceId?: string;
+        clearWorkspaceOverride?: boolean;
+      } = { agentId, sandbox };
+      if (secretValues !== undefined && Object.keys(secretValues).length > 0) params.secretValues = secretValues;
+      if (options?.workspaceId !== undefined && options.workspaceId !== "") params.workspaceId = options.workspaceId;
+      if (options?.clearWorkspaceOverride === true) params.clearWorkspaceOverride = true;
+      await this.connection.rpc("agent.sandbox.set", params);
+      this.patch({ agents: await this.connection.rpc("agent.list", this.agentListParams()) });
       return true;
     } catch (error) {
       this.fail(error);
@@ -530,13 +544,18 @@ export class ClientStore {
     agentId: string,
     targetUrl: string,
     sandbox?: AgentSandboxProfile,
+    workspaceId?: string,
   ): Promise<SandboxTestResult | null> {
     try {
-      return await this.connection.rpc("agent.sandbox.test", {
-        agentId,
-        targetUrl,
-        ...(sandbox === undefined ? {} : { sandbox }),
-      });
+      const params: {
+        agentId: string;
+        targetUrl: string;
+        sandbox?: AgentSandboxProfile;
+        workspaceId?: string;
+      } = { agentId, targetUrl };
+      if (sandbox !== undefined) params.sandbox = sandbox;
+      if (workspaceId !== undefined && workspaceId !== "") params.workspaceId = workspaceId;
+      return await this.connection.rpc("agent.sandbox.test", params);
     } catch (error) {
       this.fail(error);
       return null;
@@ -546,8 +565,10 @@ export class ClientStore {
   async allowAgentHost(agentId: string, host: string): Promise<boolean> {
     this.clearError();
     try {
-      await this.connection.rpc("agent.sandbox.allowHost", { agentId, host });
-      this.patch({ agents: await this.connection.rpc("agent.list", {}) });
+      const params: { agentId: string; host: string; workspaceId?: string } = { agentId, host };
+      if (this.state.activeWorkspaceId !== "") params.workspaceId = this.state.activeWorkspaceId;
+      await this.connection.rpc("agent.sandbox.allowHost", params);
+      this.patch({ agents: await this.connection.rpc("agent.list", this.agentListParams()) });
       return true;
     } catch (error) {
       this.fail(error);
@@ -558,8 +579,14 @@ export class ClientStore {
   async lockAgentAllowlist(agentId: string, hosts: readonly string[], merge = true): Promise<boolean> {
     this.clearError();
     try {
-      await this.connection.rpc("agent.sandbox.lockAllowlist", { agentId, hosts: [...hosts], merge });
-      this.patch({ agents: await this.connection.rpc("agent.list", {}) });
+      const params: { agentId: string; hosts: string[]; merge: boolean; workspaceId?: string } = {
+        agentId,
+        hosts: [...hosts],
+        merge,
+      };
+      if (this.state.activeWorkspaceId !== "") params.workspaceId = this.state.activeWorkspaceId;
+      await this.connection.rpc("agent.sandbox.lockAllowlist", params);
+      this.patch({ agents: await this.connection.rpc("agent.list", this.agentListParams()) });
       return true;
     } catch (error) {
       this.fail(error);
@@ -573,7 +600,7 @@ export class ClientStore {
       await this.connection.rpc("agent.custom.upsert", { agent });
       const [customAgents, agents] = await Promise.all([
         this.connection.rpc("agent.custom.list", {}),
-        this.connection.rpc("agent.list", {}),
+        this.connection.rpc("agent.list", this.agentListParams()),
       ]);
       this.patch({ customAgents, agents });
       return true;
@@ -589,7 +616,7 @@ export class ClientStore {
       await this.connection.rpc("agent.custom.remove", { id });
       const [customAgents, agents] = await Promise.all([
         this.connection.rpc("agent.custom.list", {}),
-        this.connection.rpc("agent.list", {}),
+        this.connection.rpc("agent.list", this.agentListParams()),
       ]);
       this.patch({ customAgents, agents });
     } catch (error) {

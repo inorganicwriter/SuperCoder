@@ -7,7 +7,7 @@
  */
 
 import { existsSync, readFileSync } from "node:fs";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { z } from "zod";
 import {
   AgentSandboxProfileSchema,
@@ -27,6 +27,7 @@ import type { SecretStore } from "../boot/secrets.js";
 import type { AgentNetworkProxy } from "./network-proxy.js";
 
 const StoreSchema = z.record(z.string(), AgentSandboxProfileSchema);
+const WorkspaceStoreSchema = z.record(z.string(), StoreSchema);
 const PROXY_ONLY_KEYS = [
   "HTTP_PROXY",
   "HTTPS_PROXY",
@@ -50,8 +51,10 @@ export interface CompiledSandboxEnv {
   readonly dispose: () => void;
 }
 
-function secretKeyName(agentId: string, envKey: string): string {
-  return `agent-env:${agentId}:${envKey}`;
+function secretKeyName(agentId: string, envKey: string, workspaceId?: string): string {
+  return workspaceId
+    ? `agent-env:${agentId}@ws:${workspaceId}:${envKey}`
+    : `agent-env:${agentId}:${envKey}`;
 }
 
 function cloneDefaultProfile(): AgentSandboxProfile {
@@ -78,6 +81,10 @@ function sanitizeHomeDirSegment(agentId: string): string {
 export class AgentSandboxPreferences {
   constructor(private readonly deps: AgentSandboxPreferencesDeps) {}
 
+  private get workspacesFile(): string {
+    return join(dirname(this.deps.file), "agent-sandboxes-workspaces.json");
+  }
+
   private readAll(): Record<string, AgentSandboxProfile> {
     if (!existsSync(this.deps.file)) return {};
     try {
@@ -88,7 +95,30 @@ export class AgentSandboxPreferences {
     }
   }
 
-  get(agentId: string): AgentSandboxProfile {
+  private readAllWorkspaces(): Record<string, Record<string, AgentSandboxProfile>> {
+    if (!existsSync(this.workspacesFile)) return {};
+    try {
+      const parsed = WorkspaceStoreSchema.safeParse(
+        JSON.parse(readFileSync(this.workspacesFile, "utf8")) as unknown,
+      );
+      return parsed.success ? parsed.data : {};
+    } catch {
+      return {};
+    }
+  }
+
+  hasWorkspaceOverride(agentId: string, workspaceId: string): boolean {
+    const trimmedWs = workspaceId.trim();
+    if (trimmedWs === "") return false;
+    return this.readAllWorkspaces()[trimmedWs]?.[agentId] !== undefined;
+  }
+
+  get(agentId: string, workspaceId?: string): AgentSandboxProfile {
+    const trimmedWs = workspaceId?.trim();
+    if (trimmedWs) {
+      const wsProfile = this.readAllWorkspaces()[trimmedWs]?.[agentId];
+      if (wsProfile !== undefined) return AgentSandboxProfileSchema.parse(wsProfile);
+    }
     const all = this.readAll();
     const found = all[agentId];
     return found === undefined ? cloneDefaultProfile() : AgentSandboxProfileSchema.parse(found);
@@ -98,9 +128,14 @@ export class AgentSandboxPreferences {
     agentId: string,
     input: AgentSandboxProfile,
     secretValues?: Readonly<Record<string, string>>,
+    options?: { readonly workspaceId?: string },
   ): AgentSandboxProfile {
+    const scopeWs = options?.workspaceId?.trim() ? options.workspaceId.trim() : undefined;
     const parsed = AgentSandboxProfileSchema.parse(input);
-    const previous = this.get(agentId);
+    const previous =
+      scopeWs !== undefined
+        ? (this.readAllWorkspaces()[scopeWs]?.[agentId] ?? cloneDefaultProfile())
+        : this.get(agentId);
 
     const plainSet: Record<string, string> = {};
     const nextSecretKeys = new Set<string>(parsed.env.secretKeys);
@@ -120,22 +155,34 @@ export class AgentSandboxPreferences {
       }
       if (value === "") {
         nextSecretKeys.delete(key);
-        this.deps.secrets.clear(secretKeyName(agentId, key));
+        this.deps.secrets.clear(secretKeyName(agentId, key, scopeWs));
       } else {
         pendingSecrets[key] = value;
       }
     }
 
     for (const [key, value] of Object.entries(pendingSecrets)) {
-      const saved = this.deps.secrets.set(secretKeyName(agentId, key), value);
+      const saved = this.deps.secrets.set(secretKeyName(agentId, key, scopeWs), value);
       if (!saved.ok) throw new Error(saved.error);
       nextSecretKeys.add(key);
+    }
+
+    if (scopeWs !== undefined) {
+      for (const key of nextSecretKeys) {
+        if (Object.hasOwn(pendingSecrets, key)) continue;
+        if (this.deps.secrets.get(secretKeyName(agentId, key, scopeWs)) !== null) continue;
+        const inherited = this.deps.secrets.get(secretKeyName(agentId, key));
+        if (inherited !== null) {
+          const copied = this.deps.secrets.set(secretKeyName(agentId, key, scopeWs), inherited);
+          if (!copied.ok) throw new Error(copied.error);
+        }
+      }
     }
 
     // 已被用户从 secretKeys 移除的旧密钥同步清理
     for (const oldKey of previous.env.secretKeys) {
       if (!nextSecretKeys.has(oldKey)) {
-        this.deps.secrets.clear(secretKeyName(agentId, oldKey));
+        this.deps.secrets.clear(secretKeyName(agentId, oldKey, scopeWs));
       }
     }
 
@@ -184,6 +231,16 @@ export class AgentSandboxPreferences {
       backend: normalizedBackend,
     });
 
+    if (scopeWs !== undefined) {
+      const allWs = this.readAllWorkspaces();
+      allWs[scopeWs] = {
+        ...allWs[scopeWs],
+        [agentId]: normalized,
+      };
+      writeJsonAtomic(this.workspacesFile, allWs);
+      return normalized;
+    }
+
     const all = this.readAll();
     if (isDefaultSandboxProfile(normalized)) {
       delete all[agentId];
@@ -194,10 +251,34 @@ export class AgentSandboxPreferences {
     return normalized;
   }
 
-  allowHost(agentId: string, rawHost: string): AgentSandboxProfile {
+  clearWorkspaceOverride(agentId: string, workspaceId: string): AgentSandboxProfile {
+    const scopeWs = workspaceId.trim();
+    if (scopeWs !== "") {
+      const allWs = this.readAllWorkspaces();
+      const wsMap = allWs[scopeWs];
+      const existing = wsMap?.[agentId];
+      if (wsMap !== undefined && existing !== undefined) {
+        for (const key of existing.env.secretKeys) {
+          this.deps.secrets.clear(secretKeyName(agentId, key, scopeWs));
+        }
+        delete wsMap[agentId];
+        if (Object.keys(wsMap).length === 0) {
+          delete allWs[scopeWs];
+        }
+        writeJsonAtomic(this.workspacesFile, allWs);
+      }
+    }
+    return this.get(agentId);
+  }
+
+  allowHost(agentId: string, rawHost: string, workspaceId?: string): AgentSandboxProfile {
     const host = rawHost.trim().toLowerCase().replace(/^\[|\]$/g, "").replace(/\.+$/, "");
     if (host === "") fail("invalid_params", "域名不能为空。");
-    const profile = this.get(agentId);
+    const targetWs =
+      workspaceId !== undefined && this.hasWorkspaceOverride(agentId, workspaceId)
+        ? workspaceId.trim()
+        : undefined;
+    const profile = this.get(agentId, targetWs);
     if (profile.network.mode === "offline") {
       fail("denied", "当前 Agent 处于离线模式，请先切换网络策略后再放行域名。");
     }
@@ -209,22 +290,36 @@ export class AgentSandboxPreferences {
       ? [...profile.network.allowlist]
       : [...profile.network.allowlist, host];
 
-    return this.set(agentId, {
-      ...profile,
-      network: {
-        ...profile.network,
-        allowlist: nextAllowlist,
-        denylist: nextDenylist,
+    return this.set(
+      agentId,
+      {
+        ...profile,
+        network: {
+          ...profile.network,
+          allowlist: nextAllowlist,
+          denylist: nextDenylist,
+        },
       },
-    });
+      undefined,
+      targetWs === undefined ? undefined : { workspaceId: targetWs },
+    );
   }
 
-  lockAllowlist(agentId: string, rawHosts: readonly string[], merge = true): AgentSandboxProfile {
+  lockAllowlist(
+    agentId: string,
+    rawHosts: readonly string[],
+    merge = true,
+    workspaceId?: string,
+  ): AgentSandboxProfile {
     const hosts = dedupeStrings(
       rawHosts.map((item) => item.trim().toLowerCase().replace(/^\[|\]$/g, "").replace(/\.+$/, "")),
     );
     if (hosts.length === 0) fail("invalid_params", "域名列表不能为空。");
-    const profile = this.get(agentId);
+    const targetWs =
+      workspaceId !== undefined && this.hasWorkspaceOverride(agentId, workspaceId)
+        ? workspaceId.trim()
+        : undefined;
+    const profile = this.get(agentId, targetWs);
     if (profile.network.mode === "offline") {
       fail("denied", "当前 Agent 处于离线模式，请先切换网络策略后再锁定白名单。");
     }
@@ -236,28 +331,38 @@ export class AgentSandboxPreferences {
         ? dedupeStrings([...profile.network.allowlist, ...hosts])
         : hosts;
 
-    return this.set(agentId, {
-      ...profile,
-      network: {
-        ...profile.network,
-        allowlist: nextAllowlist,
-        denylist: nextDenylist,
+    return this.set(
+      agentId,
+      {
+        ...profile,
+        network: {
+          ...profile.network,
+          allowlist: nextAllowlist,
+          denylist: nextDenylist,
+        },
       },
-    });
+      undefined,
+      targetWs === undefined ? undefined : { workspaceId: targetWs },
+    );
   }
 
   async compileEnv(
     agentId: string,
     options: {
       readonly proxy: AgentNetworkProxy;
+      readonly workspaceId?: string;
       readonly extra?: Readonly<Record<string, string>>;
       readonly onBlocked?: (host: string) => void;
       readonly onAllowed?: (host: string) => void;
     },
   ): Promise<CompiledSandboxEnv> {
-    const profile = this.get(agentId);
+    const activeWs =
+      options.workspaceId !== undefined && this.hasWorkspaceOverride(agentId, options.workspaceId)
+        ? options.workspaceId.trim()
+        : undefined;
+    const profile = this.get(agentId, activeWs);
     if (profile.backend.kind === "docker" && profile.backend.docker !== undefined) {
-      return this.compileDockerEnv(agentId, profile, options);
+      return this.compileDockerEnv(agentId, activeWs, profile, options);
     }
     const { network, env } = profile;
 
@@ -265,12 +370,16 @@ export class AgentSandboxPreferences {
     const extra: Record<string, string> = { ...env.set };
 
     for (const key of env.secretKeys) {
-      const value = this.deps.secrets.get(secretKeyName(agentId, key));
+      const value = this.deps.secrets.get(secretKeyName(agentId, key, activeWs));
       if (value !== null) extra[key] = value;
     }
 
     if (env.isolatedHome) {
-      const homeRoot = join(this.deps.sandboxesDir, sanitizeHomeDirSegment(agentId), "home");
+      const homeRoot = join(
+        this.deps.sandboxesDir,
+        sanitizeHomeDirSegment(activeWs !== undefined ? `${agentId}__${activeWs}` : agentId),
+        "home",
+      );
       const configDir = join(homeRoot, ".config");
       const dataDir = join(homeRoot, ".local", "share");
       const stateDir = join(homeRoot, ".local", "state");
@@ -358,6 +467,7 @@ export class AgentSandboxPreferences {
 
   private async compileDockerEnv(
     agentId: string,
+    activeWs: string | undefined,
     profile: AgentSandboxProfile,
     options: {
       readonly proxy: AgentNetworkProxy;
@@ -373,7 +483,7 @@ export class AgentSandboxPreferences {
     const extraMounts = [...dockerCfg.extraMounts];
 
     for (const key of env.secretKeys) {
-      const value = this.deps.secrets.get(secretKeyName(agentId, key));
+      const value = this.deps.secrets.get(secretKeyName(agentId, key, activeWs));
       if (value !== null) containerEnv[key] = value;
     }
 
@@ -383,7 +493,11 @@ export class AgentSandboxPreferences {
     }
 
     if (env.isolatedHome) {
-      const homeRoot = join(this.deps.sandboxesDir, sanitizeHomeDirSegment(agentId), "home");
+      const homeRoot = join(
+        this.deps.sandboxesDir,
+        sanitizeHomeDirSegment(activeWs !== undefined ? `${agentId}__${activeWs}` : agentId),
+        "home",
+      );
       ensureDir(homeRoot);
       ensureDir(join(homeRoot, ".config"));
       ensureDir(join(homeRoot, ".local", "share"));

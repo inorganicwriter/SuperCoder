@@ -151,11 +151,11 @@ export const METHODS = {
   },
 
   "agent.list": {
-    params: Empty,
+    params: z.object({ workspaceId: z.string().min(1).optional() }),
     result: z.array(ProviderStatusSchema),
   },
   "agent.refresh": {
-    params: Empty,
+    params: z.object({ workspaceId: z.string().min(1).optional() }),
     result: z.array(ProviderStatusSchema),
   },
   "agent.model.set": {
@@ -173,6 +173,8 @@ export const METHODS = {
   "agent.sandbox.set": {
     params: z.object({
       agentId: z.string().min(1),
+      workspaceId: z.string().min(1).optional(),
+      clearWorkspaceOverride: z.boolean().optional(),
       sandbox: AgentSandboxProfileSchema,
       secretValues: z.record(z.string(), z.string()).optional(),
     }),
@@ -181,6 +183,7 @@ export const METHODS = {
   "agent.sandbox.test": {
     params: z.object({
       agentId: z.string().min(1),
+      workspaceId: z.string().min(1).optional(),
       targetUrl: z.string().trim().min(1).max(2048),
       sandbox: AgentSandboxProfileSchema.optional(),
     }),
@@ -189,6 +192,7 @@ export const METHODS = {
   "agent.sandbox.allowHost": {
     params: z.object({
       agentId: z.string().min(1),
+      workspaceId: z.string().min(1).optional(),
       host: z.string().trim().min(1).max(256),
     }),
     result: AgentSandboxProfileSchema,
@@ -196,6 +200,7 @@ export const METHODS = {
   "agent.sandbox.lockAllowlist": {
     params: z.object({
       agentId: z.string().min(1),
+      workspaceId: z.string().min(1).optional(),
       hosts: z.array(z.string().trim().min(1).max(256)).min(1).max(200),
       merge: z.boolean().optional(),
     }),

@@ -5,9 +5,11 @@
  * 结构化输出必须是供应商原生能力 + 严格解析；OAuth 必须带 PKCE，且服务器没元数据时明确拒绝。
  */
 
+import { readFileSync } from "node:fs";
 import { createHash } from "node:crypto";
 import { describe, expect, it } from "vitest";
 import { z } from "zod";
+import { McpServerInputSchema } from "../../src/shared/domain/mcp.js";
 import { jsonSchemaFormat, parseStructured } from "../../src/host/models/structured.js";
 import {
   OAUTH_CLIENT_ID,
@@ -15,6 +17,9 @@ import {
   buildAuthorizationUrl,
 } from "../../src/host/mcp/oauth.js";
 import { createMcpToolSource } from "../../src/host/mcp/bridge.js";
+import { buildMcpStdioEnv, connectMcp } from "../../src/host/mcp/client.js";
+import { McpRegistry } from "../../src/host/mcp/registry.js";
+import { AgentNetworkProxy } from "../../src/host/delegation/network-proxy.js";
 import { silentLogger } from "../../src/host/boot/logger.js";
 import { SessionStore } from "../../src/host/session/store.js";
 import { ApprovalBroker } from "../../src/host/tools/approval.js";
@@ -218,6 +223,129 @@ describe("MCP Tool Source Integration", () => {
       }
     } finally {
       store.closeAll();
+      home.cleanup();
+    }
+  });
+
+  it("isolates MCP server env secrets and applies per-server network policy", async () => {
+    const home = makeTempHome();
+    const logger = silentLogger();
+    const settings = new SettingsStore(home.paths);
+    const secrets = new SecretStore(home.paths.secretsFile, createTestBackend());
+    const proxy = new AgentNetworkProxy();
+    const registry = new McpRegistry({ settings, secrets, logger, networkProxy: proxy });
+
+    try {
+      registry.add({
+        id: "corp-mcp",
+        label: "Corp MCP",
+        transport: "stdio",
+        target: "node",
+        args: ["-v"],
+        enabled: true,
+        sandbox: {
+          networkMode: "proxy",
+          proxyUrl: "http://127.0.0.1:9000",
+          env: {
+            PUBLIC_FLAG: "1",
+            API_TOKEN: "secret-mcp-token",
+          },
+        },
+      });
+
+      const saved = registry.list().find((s) => s.id === "corp-mcp");
+      expect(saved?.sandbox?.env).toEqual({ PUBLIC_FLAG: "1" });
+      expect(saved?.sandbox?.secretEnvKeys).toEqual(["API_TOKEN"]);
+      expect(secrets.get("mcp-env:corp-mcp:API_TOKEN")).toBe("secret-mcp-token");
+      const rawSettings = readFileSync(home.paths.settingsFile, "utf8");
+      expect(rawSettings).not.toContain("secret-mcp-token");
+
+      const proxyPrepared = await buildMcpStdioEnv(
+        {
+          id: "corp-mcp",
+          label: "Corp MCP",
+          transport: "stdio",
+          target: "node",
+          args: [],
+          enabled: true,
+          sandbox: saved?.sandbox,
+        },
+        { secretEnv: { API_TOKEN: "secret-mcp-token" } },
+      );
+      expect(proxyPrepared.env["HTTP_PROXY"]).toBe("http://127.0.0.1:9000");
+      expect(proxyPrepared.env["API_TOKEN"]).toBe("secret-mcp-token");
+      proxyPrepared.dispose();
+
+      const directPrepared = await buildMcpStdioEnv({
+        id: "direct-mcp",
+        label: "Direct MCP",
+        transport: "stdio",
+        target: "node",
+        args: [],
+        enabled: true,
+        sandbox: { networkMode: "direct" },
+      });
+      expect(directPrepared.env["HTTP_PROXY"]).toBeUndefined();
+      directPrepared.dispose();
+
+      const offlinePrepared = await buildMcpStdioEnv(
+        {
+          id: "offline-mcp",
+          label: "Offline MCP",
+          transport: "stdio",
+          target: "node",
+          args: [],
+          enabled: true,
+          sandbox: { networkMode: "offline" },
+        },
+        { networkProxy: proxy },
+      );
+      expect(offlinePrepared.env["HTTP_PROXY"]).toMatch(/^http:\/\/mcp-offline-mcp:[^@]+@127\.0\.0\.1:\d+$/);
+      offlinePrepared.dispose();
+
+      await expect(
+        connectMcp(
+          {
+            id: "http-offline",
+            label: "HTTP Offline",
+            transport: "http",
+            target: "https://example.com/mcp",
+            args: [],
+            enabled: true,
+            sandbox: { networkMode: "offline" },
+          },
+          { logger },
+        ),
+      ).rejects.toThrow(/离线模式/);
+
+      expect(
+        McpServerInputSchema.safeParse({
+          id: "http-proxy",
+          label: "HTTP Proxy",
+          transport: "http",
+          target: "https://example.com/mcp",
+          args: [],
+          enabled: true,
+          sandbox: { networkMode: "proxy", proxyUrl: "http://127.0.0.1:9000" },
+        }).success,
+      ).toBe(false);
+
+      registry.add({
+        id: "http-offline-oauth",
+        label: "HTTP Offline OAuth",
+        transport: "http",
+        target: "https://example.com/mcp",
+        args: [],
+        enabled: true,
+        sandbox: { networkMode: "offline" },
+      });
+      await expect(registry.authorizationUrl("http-offline-oauth")).rejects.toThrow(/离线模式/);
+      await registry.remove("http-offline-oauth");
+
+      await registry.remove("corp-mcp");
+      expect(secrets.get("mcp-env:corp-mcp:API_TOKEN")).toBeNull();
+    } finally {
+      await proxy.close();
       home.cleanup();
     }
   });

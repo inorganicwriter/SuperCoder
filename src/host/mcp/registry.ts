@@ -6,12 +6,18 @@
  */
 
 import type { McpServer, McpServerInput } from "../../shared/domain/mcp.js";
+import { isSensitiveEnvKey } from "../../shared/domain/sandbox.js";
 import type { Logger } from "../boot/logger.js";
 import { messageOf } from "../boot/failure.js";
 import type { Settings, SettingsStore } from "../boot/config.js";
 import type { SecretStore } from "../boot/secrets.js";
+import type { AgentNetworkProxy } from "../delegation/network-proxy.js";
 import { connectMcp, type McpConnection, type McpToolInfo } from "./client.js";
 import { buildAuthorizationUrl } from "./oauth.js";
+
+function mcpSecretKey(serverId: string, envKey: string): string {
+  return `mcp-env:${serverId}:${envKey}`;
+}
 
 interface ConnState {
   readonly connection: McpConnection | null;
@@ -24,6 +30,7 @@ export interface McpRegistryDeps {
   readonly secrets: SecretStore;
   readonly logger: Logger;
   readonly fetchImpl?: typeof fetch;
+  readonly networkProxy?: AgentNetworkProxy;
 }
 
 export class McpRegistry {
@@ -61,14 +68,51 @@ export class McpRegistry {
     if (this.settings.mcpServers.some((server) => server.id === input.id)) {
       throw new Error(`MCP 服务器 id 重复：${input.id}`);
     }
-    this.persist({ ...this.settings, mcpServers: [...this.settings.mcpServers, input] });
-    this.states.set(input.id, { connection: null, connected: null, lastError: null });
+    let normalized = input;
+    const writtenSecretKeys: string[] = [];
+    try {
+      if (input.sandbox !== undefined) {
+        const plainEnv: Record<string, string> = {};
+        const secretKeys = new Set<string>(input.sandbox.secretEnvKeys ?? []);
+        for (const [key, value] of Object.entries(input.sandbox.env ?? {})) {
+          if (isSensitiveEnvKey(key)) {
+            const secretId = mcpSecretKey(input.id, key);
+            const saved = this.deps.secrets.set(secretId, value);
+            if (!saved.ok) throw new Error(saved.error);
+            writtenSecretKeys.push(secretId);
+            secretKeys.add(key);
+          } else {
+            plainEnv[key] = value;
+          }
+        }
+        normalized = {
+          ...input,
+          sandbox: {
+            networkMode: input.sandbox.networkMode,
+            ...(input.sandbox.proxyUrl === undefined ? {} : { proxyUrl: input.sandbox.proxyUrl }),
+            ...(Object.keys(plainEnv).length > 0 ? { env: plainEnv } : {}),
+            ...(secretKeys.size > 0 ? { secretEnvKeys: [...secretKeys].sort() } : {}),
+          },
+        };
+      }
+      this.persist({ ...this.settings, mcpServers: [...this.settings.mcpServers, normalized] });
+    } catch (error) {
+      for (const secretId of writtenSecretKeys) {
+        this.deps.secrets.clear(secretId);
+      }
+      throw error;
+    }
+    this.states.set(normalized.id, { connection: null, connected: null, lastError: null });
   }
 
   async remove(id: string): Promise<void> {
+    const existing = this.settings.mcpServers.find((server) => server.id === id);
     const state = this.states.get(id);
     if (state?.connection != null) await state.connection.close().catch(() => undefined);
     this.states.delete(id);
+    for (const key of existing?.sandbox?.secretEnvKeys ?? []) {
+      this.deps.secrets.clear(mcpSecretKey(id, key));
+    }
     this.persist({
       ...this.settings,
       mcpServers: this.settings.mcpServers.filter((server) => server.id !== id),
@@ -90,8 +134,18 @@ export class McpRegistry {
     const server = this.settings.mcpServers.find((candidate) => candidate.id === id);
     if (server === undefined) throw new Error(`没有这个 MCP 服务器：${id}`);
     const token = server.oauthSecretKey === undefined ? null : this.deps.secrets.get(server.oauthSecretKey);
+    const secretEnv: Record<string, string> = {};
+    for (const key of server.sandbox?.secretEnvKeys ?? []) {
+      const value = this.deps.secrets.get(mcpSecretKey(server.id, key));
+      if (value !== null) secretEnv[key] = value;
+    }
     try {
-      const connection = await connectMcp(server, { oauthToken: token, logger: this.deps.logger });
+      const connection = await connectMcp(server, {
+        oauthToken: token,
+        logger: this.deps.logger,
+        ...(Object.keys(secretEnv).length === 0 ? {} : { secretEnv }),
+        ...(this.deps.networkProxy === undefined ? {} : { networkProxy: this.deps.networkProxy }),
+      });
       const previous = this.states.get(id)?.connection ?? null;
       if (previous !== null) await previous.close().catch(() => undefined);
       this.states.set(id, { connection, connected: true, lastError: null });
@@ -116,6 +170,9 @@ export class McpRegistry {
     if (server === undefined) throw new Error(`没有这个 MCP 服务器：${id}`);
     if (server.transport !== "http") {
       throw new Error(`${server.label} 是本机 stdio 服务器，不需要 OAuth 授权。`);
+    }
+    if (server.sandbox?.networkMode === "offline") {
+      throw new Error("当前 MCP 服务已配置为离线模式，禁止发起 OAuth 远程授权。");
     }
     const request = await buildAuthorizationUrl(server.target, this.deps.fetchImpl ?? fetch);
     return request.url;

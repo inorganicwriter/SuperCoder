@@ -186,6 +186,91 @@ describe("AgentSandboxPreferences & buildSanitizedEnv", () => {
     expect(replaced.network.allowlist).toEqual(["only.example.com"]);
   });
 
+  it("supports workspace-level sandbox overrides with isolated secrets and home dirs", async () => {
+    const temp = makeTempHome();
+    const proxy = new AgentNetworkProxy();
+    await proxy.start();
+    cleanups.push(async () => {
+      await proxy.close();
+      temp.cleanup();
+    });
+    const secrets = new SecretStore(temp.paths.secretsFile, createTestBackend());
+    const prefs = new AgentSandboxPreferences({
+      file: join(temp.home, "agent-sandboxes.json"),
+      secrets,
+      sandboxesDir: temp.paths.sandboxesDir,
+    });
+
+    prefs.set(
+      "codex",
+      AgentSandboxProfileSchema.parse({
+        network: { mode: "direct", allowlist: ["global.example.com"] },
+        env: { set: { ENV_SCOPE: "global" }, isolatedHome: true },
+      }),
+      { OPENAI_API_KEY: "sk-global-only" },
+    );
+    prefs.set(
+      "codex",
+      AgentSandboxProfileSchema.parse({
+        network: { mode: "proxy", proxyUrl: "http://127.0.0.1:8888", allowlist: ["corp.example.com"] },
+        env: { set: { ENV_SCOPE: "corp" }, isolatedHome: true },
+      }),
+      { OPENAI_API_KEY: "sk-corp-override" },
+      { workspaceId: "ws-corp" },
+    );
+
+    expect(prefs.hasWorkspaceOverride("codex", "ws-corp")).toBe(true);
+    expect(prefs.hasWorkspaceOverride("codex", "ws-other")).toBe(false);
+    expect(prefs.get("codex", "ws-other").env.set["ENV_SCOPE"]).toBe("global");
+    expect(prefs.get("codex", "ws-corp").env.set["ENV_SCOPE"]).toBe("corp");
+
+    const allowWs = prefs.allowHost("codex", "extra-corp.example.com", "ws-corp");
+    expect(allowWs.network.allowlist).toContain("extra-corp.example.com");
+    expect(prefs.get("codex").network.allowlist).not.toContain("extra-corp.example.com");
+
+    const lockedWs = prefs.lockAllowlist("codex", ["locked-corp.example.com"], false, "ws-corp");
+    expect(lockedWs.network.allowlist).toEqual(["locked-corp.example.com"]);
+    expect(prefs.get("codex").network.allowlist).toEqual(["global.example.com"]);
+
+    const compiledCorp = await prefs.compileEnv("codex", { proxy, workspaceId: "ws-corp" });
+    const compiledGlobal = await prefs.compileEnv("codex", { proxy, workspaceId: "ws-other" });
+    try {
+      expect(compiledCorp.env["OPENAI_API_KEY"]).toBe("sk-corp-override");
+      expect(compiledGlobal.env["OPENAI_API_KEY"]).toBe("sk-global-only");
+      expect(compiledCorp.env["HOME"]).not.toBe(compiledGlobal.env["HOME"]);
+    } finally {
+      compiledCorp.dispose();
+      compiledGlobal.dispose();
+    }
+
+    const reverted = prefs.clearWorkspaceOverride("codex", "ws-corp");
+    expect(prefs.hasWorkspaceOverride("codex", "ws-corp")).toBe(false);
+    expect(reverted.env.set["ENV_SCOPE"]).toBe("global");
+    expect(secrets.get("agent-env:codex@ws:ws-corp:OPENAI_API_KEY")).toBeNull();
+    expect(secrets.get("agent-env:codex:OPENAI_API_KEY")).toBe("sk-global-only");
+
+    // 继承全局 secretKeys 但未重新输入密文时，应复制到工作区独立槽位并在清理时不影响全局
+    prefs.set(
+      "codex",
+      AgentSandboxProfileSchema.parse({
+        network: { mode: "direct" },
+        env: { secretKeys: ["OPENAI_API_KEY"] },
+      }),
+      undefined,
+      { workspaceId: "ws-inherited" },
+    );
+    expect(secrets.get("agent-env:codex@ws:ws-inherited:OPENAI_API_KEY")).toBe("sk-global-only");
+    const compiledInherited = await prefs.compileEnv("codex", { proxy, workspaceId: "ws-inherited" });
+    try {
+      expect(compiledInherited.env["OPENAI_API_KEY"]).toBe("sk-global-only");
+    } finally {
+      compiledInherited.dispose();
+    }
+    prefs.clearWorkspaceOverride("codex", "ws-inherited");
+    expect(secrets.get("agent-env:codex@ws:ws-inherited:OPENAI_API_KEY")).toBeNull();
+    expect(secrets.get("agent-env:codex:OPENAI_API_KEY")).toBe("sk-global-only");
+  });
+
   it("skips desktop-only providers when process sandbox overrides are active", async () => {
     const select = new ProviderSelect([
       {

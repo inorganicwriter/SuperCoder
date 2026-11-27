@@ -179,7 +179,7 @@ export class DelegationRunner {
 
   private async execute(input: DispatchInput, childId: string): Promise<TaskView> {
     const { select, locks, logger } = this.deps;
-    const sandbox = this.deps.sandboxes?.get(input.agentId);
+    const sandbox = this.deps.sandboxes?.get(input.agentId, input.workspaceId);
     const isDockerBackend = sandbox?.backend.kind === "docker";
     if (isDockerBackend && this.deps.detectDocker !== undefined) {
       const dockerStatus = await this.deps.detectDocker();
@@ -309,6 +309,7 @@ export class DelegationRunner {
       if (this.deps.sandboxes !== undefined && this.deps.networkProxy !== undefined) {
         compiledEnv = await this.deps.sandboxes.compileEnv(input.agentId, {
           proxy: this.deps.networkProxy,
+          workspaceId: input.workspaceId,
           onBlocked: (host) => {
             if (!executionSettled) record({ type: "trace", summary: `net:blocked:${host}` });
           },

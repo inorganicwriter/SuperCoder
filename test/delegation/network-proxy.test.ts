@@ -158,6 +158,17 @@ describe("AgentNetworkProxy", () => {
 
     const deniedRes = await proxyHttpRequest(allowedScope.proxyUrl, "http://blocked.invalid/secret");
     expect(deniedRes.status).toBe(403);
+
+    const colonScope = proxy.registerScope({
+      agentId: "mcp:colon-test",
+      network: AgentSandboxProfileSchema.parse({
+        network: { mode: "direct", allowlist: ["127.0.0.1"] },
+      }).network,
+    });
+    const colonRes = await proxyHttpRequest(colonScope.proxyUrl, `http://127.0.0.1:${target.port}/colon`);
+    expect(colonRes.status).toBe(200);
+    expect(colonRes.body).toBe("target:GET:/colon");
+    colonScope.dispose();
     expect(blockedHosts).toEqual(["blocked.invalid"]);
     expect(allowedHosts).toEqual(["127.0.0.1", "127.0.0.1"]);
     allowedScope.dispose();

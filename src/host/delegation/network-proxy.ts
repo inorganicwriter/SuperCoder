@@ -348,7 +348,7 @@ export class AgentNetworkProxy {
     } catch {
       return null;
     }
-    const sep = decoded.indexOf(":");
+    const sep = decoded.lastIndexOf(":");
     if (sep < 0) return null;
     const token = decoded.slice(sep + 1);
     return this.scopes.get(token) ?? null;
