@@ -9,6 +9,9 @@
  * 只读策略实现：在权限层拦截文件写入与命令执行操作。
  */
 
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import type {
   DelegationEvent,
   DelegationRequest,
@@ -114,6 +117,11 @@ export class ClaudeCodeProvider implements DelegationProvider {
     if (request.resumeSessionId !== undefined && request.resumeSessionId !== "") {
       args.push("--resume", request.resumeSessionId);
     }
+    let mcpDir: string | undefined;
+    let dockerSpec =
+      request.docker === undefined
+        ? undefined
+        : { ...request.docker, workspaceReadOnly: request.mode === "read-only" };
     const stdin = buildDelegationPrompt(request);
     const emitDelivery = (state: string): void =>
       request.onEvent({ type: "trace", summary: `delivery:${state}` });
@@ -128,6 +136,37 @@ export class ClaudeCodeProvider implements DelegationProvider {
     };
 
     try {
+      if (request.superagentMcp !== undefined) {
+        mcpDir = mkdtempSync(join(tmpdir(), "supercoder-claude-mcp-"));
+        const mcpFile = join(mcpDir, "mcp-config.json");
+        writeFileSync(
+          mcpFile,
+          JSON.stringify({
+            mcpServers: {
+              [request.superagentMcp.name]: {
+                type: "http",
+                url: request.superagentMcp.url,
+                headers: {
+                  Authorization: `Bearer ${request.superagentMcp.bearerToken}`,
+                },
+              },
+            },
+          }),
+          { mode: 0o600 },
+        );
+        let mcpArg = mcpFile;
+        if (dockerSpec !== undefined) {
+          mcpArg = "/tmp/supercoder-mcp/mcp-config.json";
+          dockerSpec = {
+            ...dockerSpec,
+            extraMounts: [
+              ...dockerSpec.extraMounts,
+              { host: mcpDir, container: "/tmp/supercoder-mcp", readOnly: true },
+            ],
+          };
+        }
+        args.push("--mcp-config", mcpArg, "--allowedTools", `mcp__${request.superagentMcp.name}__*`);
+      }
       request.onEvent({ type: "phase", phase: "spawn" });
       emitDelivery("queued");
       const result =
@@ -137,9 +176,7 @@ export class ClaudeCodeProvider implements DelegationProvider {
               cwd: request.workspace,
               input: stdin,
               ...(request.env === undefined ? {} : { env: request.env as NodeJS.ProcessEnv }),
-              ...(request.docker === undefined
-                ? {}
-                : { docker: { ...request.docker, workspaceReadOnly: request.mode === "read-only" } }),
+              ...(dockerSpec === undefined ? {} : { docker: dockerSpec }),
               ...(this.deps.timeoutMs !== undefined
                 ? { timeoutMs: this.deps.timeoutMs }
                 : { idleTimeoutMs: DEFAULT_TIMEOUT_MS }),
@@ -211,6 +248,8 @@ export class ClaudeCodeProvider implements DelegationProvider {
         diagnostic: diagnostic("spawn", classify(message), message) as SafeDiagnostic,
         durationMs: Date.now() - startedAt,
       };
+    } finally {
+      if (mcpDir !== undefined) rmSync(mcpDir, { recursive: true, force: true });
     }
   }
 

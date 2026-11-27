@@ -85,6 +85,12 @@ export const DelegationEventSchema = z.discriminatedUnion("type", [
 ]);
 export type DelegationEvent = z.infer<typeof DelegationEventSchema>;
 
+export interface SuperagentMcpEndpoint {
+  readonly name: string;
+  readonly url: string;
+  readonly bearerToken: string;
+}
+
 /** 任务分派请求。signal 与 onEvent 是运行时对象，不进 zod。 */
 export interface DelegationRequest {
   readonly childId: string;
@@ -103,6 +109,8 @@ export interface DelegationRequest {
   readonly env?: Record<string, string | undefined>;
   /** Runtime-only Docker container isolation config; never serialize into events or logs. */
   readonly docker?: DockerBackendConfig & { readonly ownerTag?: string };
+  /** Runtime-only local MCP orchestration bridge endpoint for external Superagent; never serialize into events or logs. */
+  readonly superagentMcp?: SuperagentMcpEndpoint;
   readonly effort?: string;
   readonly resumeSessionId?: string;
   readonly signal: AbortSignal;

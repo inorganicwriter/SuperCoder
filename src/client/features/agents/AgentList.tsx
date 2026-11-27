@@ -72,6 +72,7 @@ function AgentRow({ agent }: { agent: ProviderStatus }): JSX.Element {
   const [loading, setLoading] = useState(false);
   const historyOnly = agent.level === 4;
   const hasInterface = agent.installed && agent.level !== null && !historyOnly;
+  const isSuperagent = state.superagent.kind === "agent" && state.superagent.agentId === agent.id;
   const canLoad = hasInterface && state.activeWorkspaceId !== "";
   const profiles = ["opencode", "codex", "deepseek-harness"].includes(agent.id)
     ? state.models.filter((item) => item.kind === "openai-compatible" || item.kind === "deepseek") : [];
@@ -104,6 +105,7 @@ function AgentRow({ agent }: { agent: ProviderStatus }): JSX.Element {
       <summary className={styles.cardHead}>
         <span className={hasInterface ? styles.dotReady : historyOnly ? styles.dotPartial : styles.dotOff} aria-hidden="true" />
         <strong className={styles.name}>{agent.label}</strong>
+        {isSuperagent ? <span className={styles.via}>{t("agent.superagentBadge")}</span> : null}
         {agent.sandbox?.network.mode === "proxy" ? <span className={styles.via}>{t("agent.badgeProxy")}</span> : null}
         {agent.sandbox?.network.mode === "direct" ? <span className={styles.via}>{t("agent.badgeDirect")}</span> : null}
         {agent.sandbox?.network.mode === "offline" ? <span className={styles.via}>{t("agent.badgeOffline")}</span> : null}
@@ -157,6 +159,19 @@ function AgentRow({ agent }: { agent: ProviderStatus }): JSX.Element {
               onChange={(next) => void store.setAgentModel(agent.id, next === "" ? null : next)}
             />
           </div>
+        </div>
+        <div className={styles.maintenanceBar}>
+          <button
+            type="button"
+            onClick={() =>
+              void store.setSuperagent(
+                isSuperagent ? { kind: "model" } : { kind: "agent", agentId: agent.id },
+              )
+            }
+          >
+            {isSuperagent ? t("agent.unsetSuperagent") : t("agent.setSuperagent")}
+          </button>
+          <span className={styles.hint}>{t("agent.superagentHint")}</span>
         </div>
         <AgentSandboxEditor agent={agent} />
         </>

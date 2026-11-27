@@ -336,11 +336,34 @@ export class AcpProvider implements DelegationProvider {
       const resumeMethod = capabilities["loadSession"] === true ? "session/load" : asRecord(capabilities["sessionCapabilities"])["resume"] !== undefined ? "session/resume" : undefined;
       if (request.resumeSessionId && !resumeMethod) throw new Error("此 Agent 未声明支持恢复会话");
 
-      const created = (await transport.request(request.resumeSessionId ? resumeMethod! : "session/new", {
+      const mcpServers = request.superagentMcp === undefined
+        ? []
+        : [
+            {
+              type: "http",
+              name: request.superagentMcp.name,
+              url: request.superagentMcp.url,
+              headers: [{ name: "Authorization", value: `Bearer ${request.superagentMcp.bearerToken}` }],
+            },
+          ];
+      const sessionMethod = request.resumeSessionId ? resumeMethod! : "session/new";
+      const baseSessionParams = {
         cwd: rpcCwd,
-        mcpServers: [],
         ...(request.resumeSessionId === undefined ? {} : { sessionId: request.resumeSessionId }),
-      })) as { sessionId?: string; configOptions?: Array<{ id?: string; category?: string }>; models?: unknown };
+      };
+      let created: { sessionId?: string; configOptions?: Array<{ id?: string; category?: string }>; models?: unknown };
+      try {
+        created = (await transport.request(sessionMethod, {
+          ...baseSessionParams,
+          mcpServers,
+        })) as { sessionId?: string; configOptions?: Array<{ id?: string; category?: string }>; models?: unknown };
+      } catch (error) {
+        if (mcpServers.length === 0 || request.signal.aborted) throw error;
+        created = (await transport.request(sessionMethod, {
+          ...baseSessionParams,
+          mcpServers: [],
+        })) as { sessionId?: string; configOptions?: Array<{ id?: string; category?: string }>; models?: unknown };
+      }
       if (request.resumeSessionId && created.sessionId === undefined) created.sessionId = request.resumeSessionId;
       if (created.sessionId === undefined) {
         return {

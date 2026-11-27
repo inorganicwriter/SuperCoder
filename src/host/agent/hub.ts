@@ -6,6 +6,7 @@
  */
 
 import { randomUUID } from "node:crypto";
+import { DEFAULT_SUPERAGENT_CONFIG, type SuperagentConfig } from "../../shared/domain/superagent.js";
 import type { SessionHandle } from "../session/handle.js";
 import type { Logger } from "../boot/logger.js";
 import { fail } from "../boot/failure.js";
@@ -13,6 +14,7 @@ import type { ModelCatalog } from "../models/catalog.js";
 import type { ApprovalBroker, Decision, RememberScope } from "../tools/approval.js";
 import type { ToolPipeline } from "../tools/pipeline.js";
 import type { ExternalToolSource, ToolRegistry } from "../tools/registry.js";
+import type { ExternalTurnRunner } from "./external-turn.js";
 import type { QuestionBroker } from "./questions.js";
 import { TurnRunner, type TurnStatus } from "./turn.js";
 
@@ -30,6 +32,9 @@ export interface AgentHubDeps {
   readonly canParallelDispatch?: (agentId: string, mode: "read-only" | "write", workspaceId?: string) => boolean;
   /** 本工作区其它对话保存的共享上下文，见 TurnDeps.sharedContext。 */
   readonly sharedContext?: (session: SessionHandle) => string;
+  readonly superagent?: () => SuperagentConfig;
+  readonly validateSuperagentAgent?: (agentId: string) => void;
+  readonly externalRunner?: ExternalTurnRunner;
 }
 
 export interface SendInput {
@@ -51,10 +56,46 @@ export class AgentHub {
     if (input.text.trim() === "") {
       fail("invalid_params", "消息内容不能为空。");
     }
+
+    const activeSuperagent =
+      input.modelId !== undefined
+        ? DEFAULT_SUPERAGENT_CONFIG
+        : (this.deps.superagent?.() ?? DEFAULT_SUPERAGENT_CONFIG);
+    if (activeSuperagent.kind === "agent") {
+      if (this.deps.externalRunner === undefined) {
+        fail("unsupported", "当前运行环境不支持外部 Agent 作为 Superagent。");
+      }
+      this.deps.validateSuperagentAgent?.(activeSuperagent.agentId);
+      session.beginTurn(turnId);
+      const controller = new AbortController();
+      this.controllers.set(turnId, controller);
+      const run = this.deps.externalRunner
+        .run({
+          session,
+          turnId,
+          text: input.text,
+          attachments: input.attachments,
+          agentId: activeSuperagent.agentId,
+          signal: controller.signal,
+        })
+        .catch((error: unknown) => {
+          this.deps.logger.error({ error, turnId }, "外部 Superagent 回合失败");
+          return "unknown" as TurnStatus;
+        })
+        .finally(() => {
+          this.controllers.delete(turnId);
+          session.endTurn();
+          session.writeIndex();
+          this.runs.delete(turnId);
+        });
+      this.runs.set(turnId, run);
+      return { turnId };
+    }
+
     // 没有模型档案就不开回合：必须在 beginTurn 之前判定，否则会话会停在"正在执行"。
     const modelId = input.modelId ?? this.deps.models.defaultModelId;
     if (modelId === null) {
-      fail("denied", "未配置模型，请在侧栏「模型管理」中添加模型并配置密钥。");
+      fail("denied", "未配置模型，请在侧栏「模型管理」中添加模型并配置密钥，或在左下角指定外部 Agent 作为 Superagent。");
     }
     // beginTurn 在忙时会抛 busy（C4）。
     session.beginTurn(turnId);

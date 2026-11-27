@@ -73,7 +73,7 @@ describe("RPC Callable Surface", () => {
     try {
       const registered = fixture.host.router.methods().sort();
       expect(registered).toEqual(Object.keys(METHODS).sort());
-      expect(registered).toHaveLength(50);
+      expect(registered).toHaveLength(52);
     } finally {
       await fixture.cleanup();
     }
@@ -517,6 +517,53 @@ describe("RPC Callable Surface", () => {
       const notRunning = await fixture.errorOf("task.cancel", { sessionId, taskId: "没有这个任务" });
       expect(notRunning.code).toBe("not_found");
       expect(notRunning.message).toContain("没有在运行");
+    } finally {
+      await fixture.cleanup();
+    }
+  });
+
+  it("reads superagent config, rejects unavailable agents, and persists model fallback", async () => {
+    const fixture = await boot();
+    try {
+      const initial = await fixture.call("superagent.get", {});
+      expect(initial).toEqual({ kind: "model" });
+
+      const missingErr = await fixture.errorOf("superagent.set", { kind: "agent", agentId: "nonexistent-agent" });
+      expect(missingErr.code).toBe("invalid_params");
+
+      await fixture.call("agent.custom.upsert", {
+        agent: {
+          id: "unavailable-custom",
+          label: "Unavailable Custom",
+          protocol: "command",
+          binary: "definitely-missing-binary-xyz-999",
+          args: [],
+          enabled: true,
+        },
+      });
+      const unavailableErr = await fixture.errorOf("superagent.set", { kind: "agent", agentId: "unavailable-custom" });
+      expect(unavailableErr.code).toBe("denied");
+
+      await fixture.call("agent.custom.upsert", {
+        agent: {
+          id: "runnable-custom",
+          label: "Runnable Custom",
+          protocol: "command",
+          binary: process.execPath,
+          args: ["-e", "console.log('ok')"],
+          enabled: true,
+        },
+      });
+      const savedAgent = await fixture.call("superagent.set", { kind: "agent", agentId: "runnable-custom" });
+      expect(savedAgent).toEqual({ kind: "agent", agentId: "runnable-custom" });
+      expect(await fixture.call("superagent.get", {})).toEqual({ kind: "agent", agentId: "runnable-custom" });
+
+      // 删除正担任 Superagent 的自定义 Agent 时自动回退到 model
+      await fixture.call("agent.custom.remove", { id: "runnable-custom" });
+      expect(await fixture.call("superagent.get", {})).toEqual({ kind: "model" });
+
+      const savedModel = await fixture.call("superagent.set", { kind: "model" });
+      expect(savedModel).toEqual({ kind: "model" });
     } finally {
       await fixture.cleanup();
     }

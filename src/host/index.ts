@@ -29,7 +29,10 @@ import { RpcRouter, assertFullCoverage } from "./channel/rpc.js";
 import { startChannel, type RunningChannel } from "./channel/server.js";
 import { SessionStore } from "./session/store.js";
 import { AgentHub } from "./agent/hub.js";
+import { ExternalTurnRunner } from "./agent/external-turn.js";
 import { QuestionBroker } from "./agent/questions.js";
+import { SuperagentMcpBridge } from "./agent/superagent-mcp.js";
+import { SuperagentPreferences } from "./agent/superagent-preferences.js";
 import { ToolRegistry } from "./tools/registry.js";
 import { ApprovalBroker } from "./tools/approval.js";
 import { ToolPipeline } from "./tools/pipeline.js";
@@ -300,6 +303,25 @@ export async function startHost(options: HostOptions = {}): Promise<RunningHost>
   const externalTools = createMcpToolSource(mcp, logger);
 
   const pipeline = new ToolPipeline({ registry, approvals, policy: approvalPolicy, externalTools, logger });
+  const superagentPrefs = new SuperagentPreferences(paths.home);
+  const superagentMcp = new SuperagentMcpBridge({ registry, pipeline, logger });
+  const externalRunner = new ExternalTurnRunner({
+    select,
+    sandboxes: agentSandboxes,
+    networkProxy,
+    detectDocker: () => detectDocker(false),
+    superagentPrefs,
+    superagentMcp,
+    registry,
+    approvals,
+    logger,
+    language,
+    workspacePath: (session) => workspacePathOf(session.meta.workspace),
+    checkAgentModel: (agentId) => checkAgentModel(agentId, agentModels.get(agentId), agentModelDeps),
+    modelConfigFor,
+    selectedModelOf: (agentId) => agentModels.get(agentId),
+    sharedContext: (session) => sharedContextFor(sessions.capsules(session.meta.workspace), session.sessionId, session.meta.createdAt),
+  });
   const hub = new AgentHub({
     models,
     tools: pipeline,
@@ -313,6 +335,11 @@ export async function startHost(options: HostOptions = {}): Promise<RunningHost>
     canParallelDispatch: (agentId, mode, workspaceId) =>
       mode === "read-only" || agentSandboxes.get(agentId, workspaceId).workspace.isolation === "worktree",
     sharedContext: (session) => sharedContextFor(sessions.capsules(session.meta.workspace), session.sessionId, session.meta.createdAt),
+    superagent: () => superagentPrefs.get(),
+    validateSuperagentAgent: (agentId) => {
+      select.family(agentId);
+    },
+    externalRunner,
   });
 
   const router = new RpcRouter(logger);
@@ -348,6 +375,7 @@ export async function startHost(options: HostOptions = {}): Promise<RunningHost>
   });
   router.register("session.delete", (params) => {
     sessions.remove(params.sessionId);
+    superagentPrefs.clearSessionThread(params.sessionId);
     return {};
   });
   router.register("session.rebuild", (params) => {
@@ -643,6 +671,12 @@ export async function startHost(options: HostOptions = {}): Promise<RunningHost>
   router.register("agent.custom.list", () => customAgents.list());
   router.register("agent.custom.upsert", (params) => {
     const saved = customAgents.upsert(params.agent, BUILTIN_AGENT_IDS);
+    if (!saved.enabled) {
+      const activeSuperagent = superagentPrefs.get();
+      if (activeSuperagent.kind === "agent" && activeSuperagent.agentId === saved.id) {
+        superagentPrefs.set({ kind: "model" });
+      }
+    }
     select.invalidate();
     return saved;
   });
@@ -650,8 +684,26 @@ export async function startHost(options: HostOptions = {}): Promise<RunningHost>
     if (!customAgents.remove(params.id)) {
       fail("not_found", `未找到自定义 Agent：${params.id}。`);
     }
+    const activeSuperagent = superagentPrefs.get();
+    if (activeSuperagent.kind === "agent" && activeSuperagent.agentId === params.id) {
+      superagentPrefs.set({ kind: "model" });
+    }
     select.invalidate();
     return {};
+  });
+
+  // —— superagent ——
+  router.register("superagent.get", () => superagentPrefs.get());
+  router.register("superagent.set", async (params) => {
+    if (params.kind === "agent") {
+      select.family(params.agentId);
+      const statuses = await agentStatuses(false);
+      const match = statuses.find((agent) => agent.id === params.agentId);
+      if (match === undefined || !match.installed || match.level === null || match.level === 4) {
+        fail("denied", `外部 Agent ${params.agentId} 当前不可用或仅支持只读历史，无法设为 Superagent。`);
+      }
+    }
+    return superagentPrefs.set(params);
   });
 
   // —— model ——
@@ -832,6 +884,7 @@ export async function startHost(options: HostOptions = {}): Promise<RunningHost>
       for (const unsubscribe of subscriptions.values()) unsubscribe();
       subscriptions.clear();
       hub.shutdown();
+      await superagentMcp.close();
       await mcp.close();
       await networkProxy.close();
       await channel.close();
@@ -844,7 +897,7 @@ export async function startHost(options: HostOptions = {}): Promise<RunningHost>
 /** 方法数量变化时同步检查协议与注册面。 */
 function assertMethodCount(): void {
   const count = Object.keys(METHODS).length;
-  if (count !== 50) throw new Error(`RPC 方法数量应为 50，实际 ${count}`);
+  if (count !== 52) throw new Error(`RPC 方法数量应为 52，实际 ${count}`);
 }
 
 /** 诊断包：脱敏设置 + 会话日志 + 说明；不含任何密钥。 */

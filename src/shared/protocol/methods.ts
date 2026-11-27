@@ -11,6 +11,7 @@ import { CustomAgentSchema } from "../domain/custom-agent.js";
 import { McpServerInputSchema, McpServerSchema } from "../domain/mcp.js";
 import { ModelProfileSchema, ModelProfileViewSchema, ModelTestResultSchema } from "../domain/model.js";
 import { ProviderModelSchema, ProviderStatusSchema } from "../domain/provider.js";
+import { SuperagentConfigSchema } from "../domain/superagent.js";
 import {
   AgentSandboxProfileSchema,
   SandboxTestResultSchema,
@@ -217,6 +218,15 @@ export const METHODS = {
   "agent.custom.remove": {
     params: z.object({ id: z.string().min(1) }),
     result: Empty,
+  },
+
+  "superagent.get": {
+    params: Empty,
+    result: SuperagentConfigSchema,
+  },
+  "superagent.set": {
+    params: SuperagentConfigSchema,
+    result: SuperagentConfigSchema,
   },
 
   "model.list": {

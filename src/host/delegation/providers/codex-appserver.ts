@@ -14,6 +14,7 @@ import type {
   DelegationResult,
   SafeDiagnostic,
   AgentModelConfig,
+  SuperagentMcpEndpoint,
 } from "../../../shared/domain/delegation.js";
 import type {
   DelegationHandle,
@@ -146,7 +147,15 @@ export class CodexAppServerProvider implements DelegationProvider {
       ? { ...request.docker, workspaceReadOnly: request.mode === "read-only" }
       : undefined;
     const transport =
-      this.deps.createTransport?.(request.workspace) ?? spawnCodexTransport(request.workspace, request.modelConfig, this.deps.allowPermissions, request.env, dockerSpec);
+      this.deps.createTransport?.(request.workspace) ??
+      spawnCodexTransport(
+        request.workspace,
+        request.modelConfig,
+        this.deps.allowPermissions,
+        request.env,
+        dockerSpec,
+        request.superagentMcp,
+      );
     const rpcCwd = dockerSpec !== undefined ? "/workspace" : request.workspace;
     const candidates: AnswerCandidate[] = [];
     let phase: DelegationPhase = "handshake";
@@ -453,6 +462,7 @@ export function spawnCodexTransport(
   allowPermissions?: () => boolean,
   runtimeEnv?: Record<string, string | undefined>,
   docker?: DockerRunSpec,
+  superagentMcp?: SuperagentMcpEndpoint,
 ): JsonRpcTransport {
   const args = ["app-server"];
   const effectiveBaseUrl =
@@ -460,11 +470,24 @@ export function spawnCodexTransport(
       ? rewriteLoopbackUrlForDocker(modelConfig.baseUrl)
       : modelConfig?.baseUrl;
   if (modelConfig && effectiveBaseUrl !== undefined) args.push("-c", 'model_provider="supercoder"', "-c", 'web_search="disabled"', "-c", 'model_providers.supercoder.name="SuperCoder"', "-c", `model_providers.supercoder.base_url=${JSON.stringify(effectiveBaseUrl)}`, "-c", 'model_providers.supercoder.env_key="SUPERCODER_AGENT_API_KEY"', "-c", 'model_providers.supercoder.wire_api="responses"', "-c", "model_providers.supercoder.requires_openai_auth=false", "-c", "model_providers.supercoder.supports_websockets=false");
+  if (superagentMcp !== undefined) {
+    args.push(
+      "-c",
+      `mcp_servers.${superagentMcp.name}.url=${JSON.stringify(superagentMcp.url)}`,
+      "-c",
+      `mcp_servers.${superagentMcp.name}.bearer_token_env_var="SUPERCODER_MCP_TOKEN"`,
+    );
+  }
+  const injectedTokens: Record<string, string> = {
+    ...(modelConfig ? { SUPERCODER_AGENT_API_KEY: modelConfig.apiKey } : {}),
+    ...(superagentMcp ? { SUPERCODER_MCP_TOKEN: superagentMcp.bearerToken } : {}),
+  };
+  const hasInjected = Object.keys(injectedTokens).length > 0;
   const envOption =
     runtimeEnv !== undefined
-      ? { env: { ...runtimeEnv, ...(modelConfig ? { SUPERCODER_AGENT_API_KEY: modelConfig.apiKey } : {}) } as NodeJS.ProcessEnv }
-      : modelConfig
-        ? { env: sanitizedEnv({ SUPERCODER_AGENT_API_KEY: modelConfig.apiKey }) }
+      ? { env: { ...runtimeEnv, ...injectedTokens } as NodeJS.ProcessEnv }
+      : hasInjected
+        ? { env: sanitizedEnv(injectedTokens) }
         : {};
   const child = spawnChild(codexBinary(), args, {
     cwd: workspace,

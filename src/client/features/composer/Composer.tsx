@@ -23,13 +23,18 @@ export function Composer({
   const [text, setText] = useState("");
   const [plusOpen, setPlusOpen] = useState(false);
   const disabled = state.status !== "open";
-  // 没有模型档案时发送会被宿主拒绝，这里先禁用按钮并给出提示。
   const profiles = userModels(state.models);
-  const noModel = state.status === "open" && profiles.length === 0;
-  // 档案在、但默认那个没填密钥：宿主同样会拒，提前说清楚，别等回合报错。
+  const usingExternalAgent = state.superagent.kind === "agent";
+  const activeExternalId = state.superagent.kind === "agent" ? state.superagent.agentId : null;
+  const activeAgent = activeExternalId === null ? undefined : state.agents.find((agent) => agent.id === activeExternalId);
+  const agentReady =
+    activeAgent !== undefined && activeAgent.installed && activeAgent.level !== null && activeAgent.level !== 4;
+  // 外部 Superagent 启用时不再要求配置 API 模型；仅检查所选外部 Agent 是否就绪。
+  const noModel = state.status === "open" && !usingExternalAgent && profiles.length === 0;
   const active = profiles.find((profile) => profile.default);
-  const noKey = state.status === "open" && active !== undefined && !active.hasKey;
-  const blocked = noModel || noKey;
+  const noKey = state.status === "open" && !usingExternalAgent && active !== undefined && !active.hasKey;
+  const agentBlocked = state.status === "open" && usingExternalAgent && !agentReady;
+  const blocked = agentBlocked || noModel || noKey;
 
   const send = (): void => {
     const value = text.trim();
@@ -101,7 +106,15 @@ export function Composer({
         </div>
         <ModelSelector onOpenModels={onOpenModels} />
         <span className={styles.hint}>
-          {noModel ? t("composer.noModel") : noKey ? t("composer.noKey") : state.busy ? t("composer.busy") : ""}
+          {agentBlocked
+            ? t("composer.agentUnavailable")
+            : noModel
+              ? t("composer.noModel")
+              : noKey
+                ? t("composer.noKey")
+                : state.busy
+                  ? t("composer.busy")
+                  : ""}
         </span>
         {state.busy && text.trim() === "" ? (
           <button type="button" className={styles.stopButton} onClick={() => void store.interrupt()}>

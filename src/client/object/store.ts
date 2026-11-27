@@ -15,6 +15,7 @@ import type { ModelProfile, ModelProfileView } from "../../shared/domain/model.j
 import type { ProviderStatus } from "../../shared/domain/provider.js";
 import type { ProviderModel } from "../../shared/domain/provider.js";
 import type { AgentSandboxProfile, SandboxTestResult } from "../../shared/domain/sandbox.js";
+import { DEFAULT_SUPERAGENT_CONFIG, type SuperagentConfig } from "../../shared/domain/superagent.js";
 import type { TaskView } from "../../shared/domain/task.js";
 import type { Workspace } from "../../shared/domain/workspace.js";
 import type { MethodName, MethodParams, MethodResult } from "../../shared/protocol/methods.js";
@@ -59,6 +60,7 @@ export interface ClientState {
   readonly tasks: readonly TaskView[];
   readonly agents: readonly ProviderStatus[];
   readonly customAgents: readonly CustomAgent[];
+  readonly superagent: SuperagentConfig;
   readonly models: readonly ModelProfileView[];
   readonly servers: readonly McpServer[];
   readonly capsules: readonly Capsule[];
@@ -77,6 +79,7 @@ const EMPTY: ClientState = {
   tasks: [],
   agents: [],
   customAgents: [],
+  superagent: DEFAULT_SUPERAGENT_CONFIG,
   models: [],
   servers: [],
   capsules: [],
@@ -169,13 +172,14 @@ export class ClientStore {
       }
       this.patch({ workspaces: workspaces.items, activeWorkspaceId: activeId });
       const wsParam = activeId !== "" ? { workspaceId: activeId } : {};
-      const [agents, customAgents, models, servers] = await Promise.all([
+      const [agents, customAgents, models, servers, superagent] = await Promise.all([
         this.connection.rpc("agent.list", wsParam),
         this.connection.rpc("agent.custom.list", {}),
         this.connection.rpc("model.list", {}),
         this.connection.rpc("mcp.list", {}),
+        this.connection.rpc("superagent.get", {}).catch(() => DEFAULT_SUPERAGENT_CONFIG),
       ]);
-      this.patch({ agents, customAgents, models, servers });
+      this.patch({ agents, customAgents, models, servers, superagent });
       if (activeId !== "") await this.loadSessions(activeId);
     } catch (error) {
       this.fail(error);
@@ -598,11 +602,24 @@ export class ClientStore {
     this.clearError();
     try {
       await this.connection.rpc("agent.custom.upsert", { agent });
-      const [customAgents, agents] = await Promise.all([
+      const [customAgents, agents, superagent] = await Promise.all([
         this.connection.rpc("agent.custom.list", {}),
         this.connection.rpc("agent.list", this.agentListParams()),
+        this.connection.rpc("superagent.get", {}).catch(() => DEFAULT_SUPERAGENT_CONFIG),
       ]);
-      this.patch({ customAgents, agents });
+      this.patch({ customAgents, agents, superagent });
+      return true;
+    } catch (error) {
+      this.fail(error);
+      return false;
+    }
+  }
+
+  async setSuperagent(config: SuperagentConfig): Promise<boolean> {
+    this.clearError();
+    try {
+      const saved = await this.connection.rpc("superagent.set", config);
+      this.patch({ superagent: saved });
       return true;
     } catch (error) {
       this.fail(error);
@@ -614,11 +631,12 @@ export class ClientStore {
     this.clearError();
     try {
       await this.connection.rpc("agent.custom.remove", { id });
-      const [customAgents, agents] = await Promise.all([
+      const [customAgents, agents, superagent] = await Promise.all([
         this.connection.rpc("agent.custom.list", {}),
         this.connection.rpc("agent.list", this.agentListParams()),
+        this.connection.rpc("superagent.get", {}).catch(() => DEFAULT_SUPERAGENT_CONFIG),
       ]);
-      this.patch({ customAgents, agents });
+      this.patch({ customAgents, agents, superagent });
     } catch (error) {
       this.fail(error);
     }

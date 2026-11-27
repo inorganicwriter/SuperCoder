@@ -22,7 +22,7 @@ import type {
   ProviderPage,
   ProviderSessionSummary,
 } from "../../../shared/domain/provider.js";
-import { runProcess, whichBinary, type RunResult } from "../../boot/exec.js";
+import { runProcess, sanitizedEnv, whichBinary, type RunResult } from "../../boot/exec.js";
 import { messageOf } from "../../boot/failure.js";
 import { selectAnswer, type AnswerCandidate } from "../answer.js";
 import { buildDelegationPrompt } from "../prompt.js";
@@ -90,10 +90,26 @@ export class CliJsonProvider implements DelegationProvider {
 
     const args = ["exec", "--json", "-o", outArg, "--sandbox", request.mode === "read-only" ? "read-only" : "workspace-write"];
     if (request.model) args.push("--model", request.model);
+    if (request.superagentMcp !== undefined) {
+      args.push(
+        "-c",
+        `mcp_servers.${request.superagentMcp.name}.url=${JSON.stringify(request.superagentMcp.url)}`,
+        "-c",
+        `mcp_servers.${request.superagentMcp.name}.bearer_token_env_var="SUPERCODER_MCP_TOKEN"`,
+      );
+    }
     if (request.resumeSessionId !== undefined && request.resumeSessionId !== "") {
       args.push("resume", request.resumeSessionId);
     }
     const stdin = buildDelegationPrompt(request);
+    const mcpTokenEnv =
+      request.superagentMcp === undefined ? undefined : { SUPERCODER_MCP_TOKEN: request.superagentMcp.bearerToken };
+    const childEnv =
+      request.env !== undefined
+        ? ({ ...request.env, ...mcpTokenEnv } as NodeJS.ProcessEnv)
+        : mcpTokenEnv !== undefined
+          ? sanitizedEnv(mcpTokenEnv)
+          : undefined;
 
     try {
       emit({ type: "phase", phase: "spawn" });
@@ -104,7 +120,7 @@ export class CliJsonProvider implements DelegationProvider {
           : await runProcess(this.deps.binary ?? codexBinary(), args, {
               cwd: request.workspace,
               input: stdin,
-              ...(request.env === undefined ? {} : { env: request.env as NodeJS.ProcessEnv }),
+              ...(childEnv === undefined ? {} : { env: childEnv }),
               ...(request.docker === undefined
                 ? {}
                 : {

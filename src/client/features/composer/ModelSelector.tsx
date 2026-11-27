@@ -1,13 +1,7 @@
 /**
  * 模型选择弹层（对应 Python 版的 `#modelSelectorPopover`）。
  *
- * 原版行为：
- * - 输入区左下角的按钮显示**当前模型名**，点一下开弹层；
- * - 弹层里每行：模型名（当前项用强调色 +「使用中」标签）、供应商标签、Key 掩码；
- * - 非当前项 hover 出现 ✕，点了直接删；
- * - 一个模型都没有时给「尚未添加任何模型」+「＋ 立即添加模型」。
- *
- * 这里不做"看起来能搜"的搜索框，也不隐藏删除 —— 原版就这两件事。
+ * 同时支持将已就绪的外部 Agent 设为 Superagent 主控，或切回 LLM 模型档案。
  */
 
 import { useState } from "react";
@@ -23,9 +17,23 @@ export function ModelSelector({ onOpenModels }: { readonly onOpenModels: () => v
 
   // 旧数据里残留的离线档案不参与选择。
   const models = userModels(state.models);
+  const runnableAgents = state.agents.filter(
+    (agent) => agent.installed && agent.level !== null && agent.level !== 4,
+  );
   // 只显示默认档案：没有默认时不回退到第一项，否则显示的名字与实际调用的模型不一致。
-  const active = models.find((model) => model.default);
-  const label = active === undefined ? t("model.noModel") : displayName(active);
+  const activeModel = models.find((model) => model.default);
+  const usingExternal = state.superagent.kind === "agent";
+  const activeExternalId = state.superagent.kind === "agent" ? state.superagent.agentId : null;
+  const activeAgent =
+    activeExternalId === null ? undefined : state.agents.find((agent) => agent.id === activeExternalId);
+  const agentReady =
+    activeAgent !== undefined && activeAgent.installed && activeAgent.level !== null && activeAgent.level !== 4;
+  const isReady = usingExternal ? agentReady : activeModel !== undefined;
+  const label = usingExternal
+    ? `${activeAgent?.label ?? activeExternalId ?? ""} · ${t("model.agentTag")}`
+    : activeModel === undefined
+      ? t("model.noModel")
+      : displayName(activeModel);
 
   const close = (): void => setOpen(false);
 
@@ -38,7 +46,7 @@ export function ModelSelector({ onOpenModels }: { readonly onOpenModels: () => v
         aria-label={t("composer.model")}
         onClick={() => setOpen((value) => !value)}
       >
-        <span className={active === undefined ? styles.dotEmpty : styles.dot} />
+        <span className={isReady ? styles.dot : styles.dotEmpty} />
         <span className={styles.triggerLabel}>{label}</span>
         <span className={styles.caret}>▾</span>
       </button>
@@ -49,8 +57,40 @@ export function ModelSelector({ onOpenModels }: { readonly onOpenModels: () => v
           <div className={styles.popover} role="dialog" aria-label={t("composer.model")}>
             <div className={styles.head}>
               <span>{t("composer.model")}</span>
-              <span className={styles.count}>{models.length}</span>
+              <span className={styles.count}>{runnableAgents.length + models.length}</span>
             </div>
+
+            {runnableAgents.length > 0 ? (
+              <>
+                <div className={styles.sectionTitle}>{t("model.superagentAgents")}</div>
+                <ul className={styles.list}>
+                  {runnableAgents.map((agent) => {
+                    const isActive = usingExternal && activeExternalId === agent.id;
+                    return (
+                      <li key={agent.id} className={styles.item}>
+                        <button
+                          type="button"
+                          className={styles.itemMain}
+                          onClick={() => {
+                            close();
+                            void store.setSuperagent({ kind: "agent", agentId: agent.id });
+                          }}
+                        >
+                          <span className={styles.itemTop}>
+                            <span className={isActive ? styles.nameActive : styles.name}>{agent.label}</span>
+                            <span className={styles.chip}>{t("model.agentTag")}</span>
+                          </span>
+                          {agent.selectedModel ? (
+                            <span className={styles.keyLine}>{agent.selectedModel}</span>
+                          ) : null}
+                        </button>
+                        {isActive ? <span className={styles.inUse}>{t("model.inUse")}</span> : null}
+                      </li>
+                    );
+                  })}
+                </ul>
+              </>
+            ) : null}
 
             {models.length === 0 ? (
               <div className={styles.empty}>
@@ -67,48 +107,57 @@ export function ModelSelector({ onOpenModels }: { readonly onOpenModels: () => v
                 </button>
               </div>
             ) : (
-              <ul className={styles.list}>
-                {models.map((model) => {
-                  const isActive = model.id === active?.id;
-                  return (
-                    <li key={model.id} className={styles.item}>
-                      <button
-                        type="button"
-                        className={styles.itemMain}
-                        onClick={() => {
-                          close();
-                          void store.saveModel({ ...model, default: true });
-                        }}
-                      >
-                        <span className={styles.itemTop}>
-                          <span className={isActive ? styles.nameActive : styles.name}>
-                            {displayName(model)}
-                          </span>
-                          <span className={styles.chip}>{providerLabel(model)}</span>
-                        </span>
-                        <span className={styles.keyLine}>
-                          {t("model.key")} {maskedKey(model)}
-                        </span>
-                      </button>
-                      {isActive ? (
-                        <span className={styles.inUse}>{t("model.inUse")}</span>
-                      ) : (
+              <>
+                {runnableAgents.length > 0 ? (
+                  <div className={styles.sectionTitle}>{t("model.apiModels")}</div>
+                ) : null}
+                <ul className={styles.list}>
+                  {models.map((model) => {
+                    const isActive = !usingExternal && model.id === activeModel?.id;
+                    return (
+                      <li key={model.id} className={styles.item}>
                         <button
                           type="button"
-                          className={styles.remove}
-                          title={t("model.remove")}
-                          aria-label={t("model.remove")}
-                          onClick={() => void store.removeModel(model.id)}
+                          className={styles.itemMain}
+                          onClick={() => {
+                            close();
+                            void store.saveModel({ ...model, default: true }).then((saved) => {
+                              if (saved && usingExternal) {
+                                void store.setSuperagent({ kind: "model" });
+                              }
+                            });
+                          }}
                         >
-                          <svg width="10" height="10" viewBox="0 0 10 10" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" aria-hidden="true">
-                    <path d="M2 2L8 8M8 2L2 8" />
-                  </svg>
+                          <span className={styles.itemTop}>
+                            <span className={isActive ? styles.nameActive : styles.name}>
+                              {displayName(model)}
+                            </span>
+                            <span className={styles.chip}>{providerLabel(model)}</span>
+                          </span>
+                          <span className={styles.keyLine}>
+                            {t("model.key")} {maskedKey(model)}
+                          </span>
                         </button>
-                      )}
-                    </li>
-                  );
-                })}
-              </ul>
+                        {isActive ? (
+                          <span className={styles.inUse}>{t("model.inUse")}</span>
+                        ) : (
+                          <button
+                            type="button"
+                            className={styles.remove}
+                            title={t("model.remove")}
+                            aria-label={t("model.remove")}
+                            onClick={() => void store.removeModel(model.id)}
+                          >
+                            <svg width="10" height="10" viewBox="0 0 10 10" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" aria-hidden="true">
+                              <path d="M2 2L8 8M8 2L2 8" />
+                            </svg>
+                          </button>
+                        )}
+                      </li>
+                    );
+                  })}
+                </ul>
+              </>
             )}
           </div>
         </>
