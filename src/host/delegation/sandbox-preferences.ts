@@ -169,6 +169,7 @@ export class AgentSandboxPreferences {
         ...(caCertPath ? { caCertPath } : {}),
         allowlist: dedupeStrings(parsed.network.allowlist),
         denylist: dedupeStrings(parsed.network.denylist),
+        ...(parsed.network.auditOutbound === true ? { auditOutbound: true } : {}),
       },
       env: {
         set: plainSet,
@@ -218,12 +219,40 @@ export class AgentSandboxPreferences {
     });
   }
 
+  lockAllowlist(agentId: string, rawHosts: readonly string[], merge = true): AgentSandboxProfile {
+    const hosts = dedupeStrings(
+      rawHosts.map((item) => item.trim().toLowerCase().replace(/^\[|\]$/g, "").replace(/\.+$/, "")),
+    );
+    if (hosts.length === 0) fail("invalid_params", "域名列表不能为空。");
+    const profile = this.get(agentId);
+    if (profile.network.mode === "offline") {
+      fail("denied", "当前 Agent 处于离线模式，请先切换网络策略后再锁定白名单。");
+    }
+    const nextDenylist = profile.network.denylist.filter(
+      (pattern) => !hosts.some((host) => matchHostPattern(host, pattern)),
+    );
+    const nextAllowlist =
+      merge && profile.network.allowlist.length > 0
+        ? dedupeStrings([...profile.network.allowlist, ...hosts])
+        : hosts;
+
+    return this.set(agentId, {
+      ...profile,
+      network: {
+        ...profile.network,
+        allowlist: nextAllowlist,
+        denylist: nextDenylist,
+      },
+    });
+  }
+
   async compileEnv(
     agentId: string,
     options: {
       readonly proxy: AgentNetworkProxy;
       readonly extra?: Readonly<Record<string, string>>;
       readonly onBlocked?: (host: string) => void;
+      readonly onAllowed?: (host: string) => void;
     },
   ): Promise<CompiledSandboxEnv> {
     const profile = this.get(agentId);
@@ -266,6 +295,7 @@ export class AgentSandboxPreferences {
       network.mode === "offline" ||
       network.allowlist.length > 0 ||
       network.denylist.length > 0 ||
+      network.auditOutbound === true ||
       isSocksUpstream;
 
     if (needsLocalGateway) {
@@ -274,6 +304,7 @@ export class AgentSandboxPreferences {
         agentId,
         network,
         ...(options.onBlocked === undefined ? {} : { onBlocked: options.onBlocked }),
+        ...(options.onAllowed === undefined ? {} : { onAllowed: options.onAllowed }),
       });
       disposeScope = scope.dispose;
       // 仅在离线模式下清理 NO_PROXY；其余模式保留宿主 NO_PROXY（若用户未显式覆盖），以免破坏本机 localhost 服务访问。
@@ -332,6 +363,7 @@ export class AgentSandboxPreferences {
       readonly proxy: AgentNetworkProxy;
       readonly extra?: Readonly<Record<string, string>>;
       readonly onBlocked?: (host: string) => void;
+      readonly onAllowed?: (host: string) => void;
     },
   ): Promise<CompiledSandboxEnv> {
     const dockerCfg = profile.backend.docker!;
@@ -383,7 +415,8 @@ export class AgentSandboxPreferences {
         network.mode === "proxy" ||
         network.mode === "inherit" ||
         network.allowlist.length > 0 ||
-        network.denylist.length > 0;
+        network.denylist.length > 0 ||
+        network.auditOutbound === true;
       if (routeViaGateway) {
         await options.proxy.startDockerGateway();
         const scope = options.proxy.registerScope({
@@ -391,6 +424,7 @@ export class AgentSandboxPreferences {
           network,
           forDocker: true,
           ...(options.onBlocked === undefined ? {} : { onBlocked: options.onBlocked }),
+          ...(options.onAllowed === undefined ? {} : { onAllowed: options.onAllowed }),
         });
         disposeScope = scope.dispose;
         for (const key of PROXY_ONLY_KEYS) {

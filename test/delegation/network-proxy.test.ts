@@ -136,21 +136,30 @@ describe("AgentNetworkProxy", () => {
     expect(unauth.status).toBe(407);
 
     const blockedHosts: string[] = [];
+    const allowedHosts: string[] = [];
     const allowedScope = proxy.registerScope({
       agentId: "agent-a",
       network: AgentSandboxProfileSchema.parse({
         network: { mode: "direct", allowlist: ["127.0.0.1"] },
       }).network,
       onBlocked: (host) => blockedHosts.push(host),
+      onAllowed: (host) => allowedHosts.push(host),
     });
 
     const okRes = await proxyHttpRequest(allowedScope.proxyUrl, `http://127.0.0.1:${target.port}/ping`);
     expect(okRes.status).toBe(200);
     expect(okRes.body).toBe("target:GET:/ping");
+    expect(allowedHosts).toEqual(["127.0.0.1"]);
+
+    const tunnelOk = await proxyConnectTunnel(allowedScope.proxyUrl, `127.0.0.1:${target.port}`);
+    expect(tunnelOk.status).toBe(200);
+    tunnelOk.socket.destroy();
+    expect(allowedHosts).toEqual(["127.0.0.1", "127.0.0.1"]);
 
     const deniedRes = await proxyHttpRequest(allowedScope.proxyUrl, "http://blocked.invalid/secret");
     expect(deniedRes.status).toBe(403);
     expect(blockedHosts).toEqual(["blocked.invalid"]);
+    expect(allowedHosts).toEqual(["127.0.0.1", "127.0.0.1"]);
     allowedScope.dispose();
 
     const offlineScope = proxy.registerScope({

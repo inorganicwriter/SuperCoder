@@ -28,6 +28,12 @@ export type TaskType = z.infer<typeof TaskTypeSchema>;
 export const TaskModeSchema = z.enum(["read-only", "write"]);
 export type TaskMode = z.infer<typeof TaskModeSchema>;
 
+export const TaskNetworkHostSchema = z.object({
+  host: z.string(),
+  count: z.number().int().positive(),
+});
+export type TaskNetworkHost = z.infer<typeof TaskNetworkHostSchema>;
+
 export const TaskViewSchema = z.object({
   taskId: z.string(),
   childId: z.string(),
@@ -47,6 +53,7 @@ export const TaskViewSchema = z.object({
   output: z.string().optional(),
   worktree: TaskWorktreeInfoSchema.optional(),
   blockedHosts: z.array(z.string()).optional(),
+  allowedHosts: z.array(TaskNetworkHostSchema).optional(),
   /** 任务分派（spawn）事件的序号，用来把任务卡片排进对话流。 */
   seq: z.number().int().positive().optional(),
   /** 人工重试次数。`unknown` 态下重试也必须由用户确认后发起。 */

@@ -73,7 +73,7 @@ describe("RPC Callable Surface", () => {
     try {
       const registered = fixture.host.router.methods().sort();
       expect(registered).toEqual(Object.keys(METHODS).sort());
-      expect(registered).toHaveLength(49);
+      expect(registered).toHaveLength(50);
     } finally {
       await fixture.cleanup();
     }
@@ -227,6 +227,19 @@ describe("RPC Callable Surface", () => {
         host: "api.anthropic.com",
       });
       expect(offlineErr.code).toBe("denied");
+
+      const locked = await fixture.call("agent.sandbox.lockAllowlist", {
+        agentId: "codex",
+        hosts: ["api.openai.com", "cdn.openai.com"],
+        merge: false,
+      });
+      expect(locked.network.allowlist).toEqual(["api.openai.com", "cdn.openai.com"]);
+
+      const offlineLockErr = await fixture.errorOf("agent.sandbox.lockAllowlist", {
+        agentId: "claude-code",
+        hosts: ["api.anthropic.com"],
+      });
+      expect(offlineLockErr.code).toBe("denied");
 
       const dupErr = await fixture.errorOf("agent.custom.upsert", {
         agent: { id: "codex", label: "Dup", protocol: "acp", binary: "codex", args: [], enabled: true },

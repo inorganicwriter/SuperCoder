@@ -24,6 +24,7 @@ interface ProxyScope {
   readonly agentId: string;
   readonly network: SandboxNetwork;
   readonly onBlocked?: (host: string) => void;
+  readonly onAllowed?: (host: string) => void;
 }
 
 export interface HostPolicyVerdict {
@@ -172,6 +173,7 @@ export class AgentNetworkProxy {
     readonly network: SandboxNetwork;
     readonly forDocker?: boolean;
     readonly onBlocked?: (host: string) => void;
+    readonly onAllowed?: (host: string) => void;
   }): { readonly proxyUrl: string; readonly dispose: () => void } {
     const port = input.forDocker === true ? this.dockerBoundPort : this.boundPort;
     if (port <= 0) {
@@ -182,6 +184,7 @@ export class AgentNetworkProxy {
       agentId: input.agentId,
       network: input.network,
       ...(input.onBlocked === undefined ? {} : { onBlocked: input.onBlocked }),
+      ...(input.onAllowed === undefined ? {} : { onAllowed: input.onAllowed }),
     });
     const host = input.forDocker === true ? "host.docker.internal" : "127.0.0.1";
     const proxyUrl = `http://${encodeURIComponent(input.agentId)}:${token}@${host}:${port}`;
@@ -379,6 +382,7 @@ export class AgentNetworkProxy {
       );
       return;
     }
+    scope.onAllowed?.(parsed.host);
 
     const upstream = resolveUpstreamProxy(parsed.host, scope.network);
     let upstreamSocket: net.Socket;
@@ -452,6 +456,7 @@ export class AgentNetworkProxy {
       res.end(`Blocked by SuperCoder sandbox: ${verdict.reason ?? url.hostname}`);
       return;
     }
+    scope.onAllowed?.(url.hostname);
 
     const port = url.port !== "" ? Number(url.port) : 80;
     const targetHost = stripIpv6Brackets(url.hostname);

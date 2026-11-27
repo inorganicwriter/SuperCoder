@@ -5,6 +5,7 @@
 import { useState } from "react";
 import { t } from "../../locale/index.js";
 import { useClientState, useStore } from "../../render/SessionProvider.js";
+import { TASK_WORKTREE_STATE_KEY, TaskSandboxSummary } from "../conversation/TaskSandboxSummary.js";
 import { EMPTY_CONFIRMED, isConfirmed, toggleConfirmed, type ConfirmedTasks } from "./confirm.js";
 import styles from "../panels.module.css";
 
@@ -61,6 +62,11 @@ export function TaskPanel(): JSX.Element {
                   </span>
                   <span className={styles.mono}>{task.providerId}</span>
                   <span className={styles.dim}>{task.agentId}</span>
+                  {task.worktree ? (
+                    <span className={styles.badge}>
+                      {t(TASK_WORKTREE_STATE_KEY[task.worktree.state])}
+                    </span>
+                  ) : null}
                 </div>
                 <div className={styles.goal}>
                   {t("task.goal")}：{task.goal}
@@ -115,6 +121,7 @@ export function TaskPanel(): JSX.Element {
                           : task.result.status}
                   </pre>
                 ) : null}
+                <TaskSandboxSummary task={task} />
                 {task.state === "unknown" ? (
                   <label className={styles.checkbox}>
                     <input

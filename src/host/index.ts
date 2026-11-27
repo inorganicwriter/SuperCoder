@@ -613,6 +613,12 @@ export async function startHost(options: HostOptions = {}): Promise<RunningHost>
     select.invalidate();
     return updated;
   });
+  router.register("agent.sandbox.lockAllowlist", (params) => {
+    select.family(params.agentId);
+    const updated = agentSandboxes.lockAllowlist(params.agentId, params.hosts, params.merge ?? true);
+    select.invalidate();
+    return updated;
+  });
   router.register("agent.custom.list", () => customAgents.list());
   router.register("agent.custom.upsert", (params) => {
     const saved = customAgents.upsert(params.agent, BUILTIN_AGENT_IDS);
@@ -817,7 +823,7 @@ export async function startHost(options: HostOptions = {}): Promise<RunningHost>
 /** 方法数量变化时同步检查协议与注册面。 */
 function assertMethodCount(): void {
   const count = Object.keys(METHODS).length;
-  if (count !== 49) throw new Error(`RPC 方法数量应为 49，实际 ${count}`);
+  if (count !== 50) throw new Error(`RPC 方法数量应为 50，实际 ${count}`);
 }
 
 /** 诊断包：脱敏设置 + 会话日志 + 说明；不含任何密钥。 */

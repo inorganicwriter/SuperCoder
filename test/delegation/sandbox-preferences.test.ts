@@ -154,6 +154,38 @@ describe("AgentSandboxPreferences & buildSanitizedEnv", () => {
     expect(() => prefs.allowHost("claude-code", "api.anthropic.com")).toThrow();
   });
 
+  it("enables local audit gateway when auditOutbound is true and locks allowlists cleanly", async () => {
+    const temp = makeTempHome("sc-audit-");
+    const proxy = new AgentNetworkProxy();
+    cleanups.push(async () => {
+      await proxy.close();
+      temp.cleanup();
+    });
+    const secrets = new SecretStore(temp.paths.secretsFile, createTestBackend());
+    const prefs = new AgentSandboxPreferences({
+      file: join(temp.home, "agent-sandboxes.json"),
+      secrets,
+      sandboxesDir: temp.paths.sandboxesDir,
+    });
+
+    const auditProfile = prefs.set("codex", AgentSandboxProfileSchema.parse({
+      network: { mode: "direct", auditOutbound: true, denylist: ["evil.test"] },
+    }));
+    expect(hasActiveProcessSandboxOverrides(auditProfile)).toBe(true);
+    expect(isDefaultSandboxProfile(auditProfile)).toBe(false);
+
+    const compiled = await prefs.compileEnv("codex", { proxy });
+    expect(compiled.env["HTTP_PROXY"]).toMatch(/^http:\/\/codex:[^@]+@127\.0\.0\.1:\d+$/);
+    compiled.dispose();
+
+    const merged = prefs.lockAllowlist("codex", ["api.openai.com", "evil.test"], true);
+    expect(merged.network.allowlist).toEqual(["api.openai.com", "evil.test"]);
+    expect(merged.network.denylist).toEqual([]);
+
+    const replaced = prefs.lockAllowlist("codex", ["only.example.com"], false);
+    expect(replaced.network.allowlist).toEqual(["only.example.com"]);
+  });
+
   it("skips desktop-only providers when process sandbox overrides are active", async () => {
     const select = new ProviderSelect([
       {

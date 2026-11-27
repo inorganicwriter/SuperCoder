@@ -21,8 +21,19 @@ describe("delegation history and live progress", () => {
     view.apply({ type: "delegation/progress", seq: 2, at: "t", childId: "c", event: { type: "session", sessionId: "native" } });
     view.apply({ type: "delegation/progress", seq: 3, at: "t", childId: "c", event: { type: "output", text: "hello" } });
     view.apply({ type: "delegation/progress", seq: 4, at: "t", childId: "c", event: { type: "trace", summary: "model:example/model" } });
-    view.apply({ type: "delegation/result", seq: 5, at: "t", childId: "c", result: { status: "ok", answer: "done", durationMs: 1 } });
-    expect(view.view().tasks[0]).toMatchObject({ nativeSessionId: "native", selectedModel: "example/model", output: "hello", result: { answer: "done" } });
+    view.apply({ type: "delegation/progress", seq: 5, at: "t", childId: "c", event: { type: "trace", summary: "net:allowed:api.openai.com" } });
+    view.apply({ type: "delegation/progress", seq: 6, at: "t", childId: "c", event: { type: "trace", summary: 'net:audit:[{"host":"api.openai.com","count":3},{"host":"registry.npmjs.org","count":1}]' } });
+    view.apply({ type: "delegation/result", seq: 7, at: "t", childId: "c", result: { status: "ok", answer: "done", durationMs: 1 } });
+    expect(view.view().tasks[0]).toMatchObject({
+      nativeSessionId: "native",
+      selectedModel: "example/model",
+      output: "hello",
+      allowedHosts: [
+        { host: "api.openai.com", count: 3 },
+        { host: "registry.npmjs.org", count: 1 },
+      ],
+      result: { answer: "done" },
+    });
   });
   it("replays recorded progress after the session store restarts", () => {
     const home = makeTempHome();

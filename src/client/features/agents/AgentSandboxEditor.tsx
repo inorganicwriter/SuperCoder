@@ -25,6 +25,7 @@ interface DraftState {
   caCertPath: string;
   allowlistText: string;
   denylistText: string;
+  auditOutbound: boolean;
   isolation: WorkspaceIsolation;
   envText: string;
   secretKeys: string[];
@@ -87,6 +88,7 @@ function toDraft(profile: AgentSandboxProfile): DraftState {
     caCertPath: profile.network.caCertPath ?? "",
     allowlistText: profile.network.allowlist.join(", "),
     denylistText: profile.network.denylist.join(", "),
+    auditOutbound: profile.network.auditOutbound === true,
     isolation: profile.workspace.isolation,
     envText: Object.entries(profile.env.set)
       .map(([key, value]) => `${key}=${value}`)
@@ -175,6 +177,7 @@ function buildProfileFromDraft(
       ...(draft.mode !== "offline" && draft.caCertPath.trim() !== "" ? { caCertPath: draft.caCertPath.trim() } : {}),
       allowlist: splitList(draft.allowlistText),
       denylist: splitList(draft.denylistText),
+      ...(draft.mode !== "offline" && draft.auditOutbound ? { auditOutbound: true } : {}),
     },
     env: {
       set: plainSet,
@@ -412,6 +415,18 @@ export function AgentSandboxEditor({ agent }: { readonly agent: ProviderStatus }
               />
             </label>
           </div>
+          <label className={styles.checkboxRow}>
+            <input
+              type="checkbox"
+              checked={draft.auditOutbound}
+              disabled={draft.mode === "offline"}
+              onChange={(event) => {
+                setSavedFlag(false);
+                setDraft((prev) => ({ ...prev, auditOutbound: event.target.checked }));
+              }}
+            />
+            <span>{t("agent.auditOutbound")}</span>
+          </label>
 
           <label className={styles.field}>
             <span>{t("agent.envVars")}</span>

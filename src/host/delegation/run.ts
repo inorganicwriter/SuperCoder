@@ -304,12 +304,22 @@ export class DelegationRunner {
     let compiledEnv: CompiledSandboxEnv | null = null;
     let result: DelegationResult;
     let wasSubmitted = false;
+    const allowedHostCounts = new Map<string, number>();
     try {
       if (this.deps.sandboxes !== undefined && this.deps.networkProxy !== undefined) {
         compiledEnv = await this.deps.sandboxes.compileEnv(input.agentId, {
           proxy: this.deps.networkProxy,
           onBlocked: (host) => {
             if (!executionSettled) record({ type: "trace", summary: `net:blocked:${host}` });
+          },
+          onAllowed: (rawHost) => {
+            const host = rawHost.trim().toLowerCase().replace(/^\[|\]$/g, "").replace(/\.+$/, "");
+            if (host === "") return;
+            const prev = allowedHostCounts.get(host) ?? 0;
+            allowedHostCounts.set(host, prev + 1);
+            if (prev === 0 && allowedHostCounts.size <= 50 && !executionSettled) {
+              record({ type: "trace", summary: `net:allowed:${host}` });
+            }
           },
         });
       }
@@ -355,6 +365,16 @@ export class DelegationRunner {
       if (!useWorktree && input.mode === "write") locks.release(input.workspaceId, childId);
       // 收尾时把剩下的输出写完，再结算 worktree 与 `delegation/result`。
       flushOutput();
+      if (allowedHostCounts.size > 0) {
+        const auditEntries = [...allowedHostCounts.entries()]
+          .sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]))
+          .slice(0, 50)
+          .map(([host, count]) => ({ host, count }));
+        this.recordEvent(input.session, childId, {
+          type: "trace",
+          summary: `net:audit:${JSON.stringify(auditEntries)}`,
+        });
+      }
     }
 
     if (worktreeMeta !== null && this.deps.worktreesDir !== undefined) {
@@ -384,7 +404,10 @@ export class DelegationRunner {
       }
     } else if (
       event.type === "trace" &&
-      (event.summary.startsWith("worktree:") || event.summary.startsWith("net:blocked:"))
+      (event.summary.startsWith("worktree:") ||
+        event.summary.startsWith("net:blocked:") ||
+        event.summary.startsWith("net:allowed:") ||
+        event.summary.startsWith("net:audit:"))
     ) {
       session.append("delegation/progress", { childId, event });
     } else if (event.type === "output" || event.type === "session") {

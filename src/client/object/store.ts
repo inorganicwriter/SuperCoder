@@ -555,6 +555,18 @@ export class ClientStore {
     }
   }
 
+  async lockAgentAllowlist(agentId: string, hosts: readonly string[], merge = true): Promise<boolean> {
+    this.clearError();
+    try {
+      await this.connection.rpc("agent.sandbox.lockAllowlist", { agentId, hosts: [...hosts], merge });
+      this.patch({ agents: await this.connection.rpc("agent.list", {}) });
+      return true;
+    } catch (error) {
+      this.fail(error);
+      return false;
+    }
+  }
+
   async saveCustomAgent(agent: CustomAgent): Promise<boolean> {
     this.clearError();
     try {

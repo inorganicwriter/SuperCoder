@@ -289,6 +289,7 @@ export class SessionDerivation {
           const progress = event.event;
           let nextWorktree = task.worktree;
           let nextBlockedHosts = task.blockedHosts;
+          let nextAllowedHosts = task.allowedHosts;
           if (progress.type === "trace") {
             const summary = progress.summary;
             if (summary.startsWith("worktree:active:")) {
@@ -337,6 +338,35 @@ export class SessionDerivation {
               if (host !== "" && !(task.blockedHosts ?? []).includes(host) && (task.blockedHosts?.length ?? 0) < 50) {
                 nextBlockedHosts = [...(task.blockedHosts ?? []), host];
               }
+            } else if (summary.startsWith("net:allowed:")) {
+              const host = summary.slice("net:allowed:".length).trim();
+              const existing = nextAllowedHosts ?? [];
+              if (host !== "" && !existing.some((entry) => entry.host === host) && existing.length < 50) {
+                nextAllowedHosts = [...existing, { host, count: 1 }];
+              }
+            } else if (summary.startsWith("net:audit:")) {
+              const raw = summary.slice("net:audit:".length);
+              try {
+                const parsed = JSON.parse(raw) as unknown;
+                if (Array.isArray(parsed)) {
+                  const entries = parsed
+                    .filter(
+                      (item): item is { host: string; count: number } =>
+                        typeof item === "object" &&
+                        item !== null &&
+                        typeof (item as Record<string, unknown>)["host"] === "string" &&
+                        ((item as Record<string, unknown>)["host"] as string) !== "" &&
+                        typeof (item as Record<string, unknown>)["count"] === "number" &&
+                        Number.isInteger((item as Record<string, unknown>)["count"] as number) &&
+                        ((item as Record<string, unknown>)["count"] as number) > 0,
+                    )
+                    .slice(0, 50)
+                    .map((item) => ({ host: item.host, count: item.count }));
+                  if (entries.length > 0) nextAllowedHosts = entries;
+                }
+              } catch {
+                /* 忽略损坏的出网审计摘要 */
+              }
             }
           }
           this.tasks.set(event.childId, {
@@ -349,6 +379,7 @@ export class SessionDerivation {
             ...(progress.type === "output" ? { output: (task.output ?? "") + progress.text } : {}),
             ...(nextWorktree === undefined ? {} : { worktree: nextWorktree }),
             ...(nextBlockedHosts === undefined ? {} : { blockedHosts: nextBlockedHosts }),
+            ...(nextAllowedHosts === undefined ? {} : { allowedHosts: nextAllowedHosts }),
             updatedAt: event.at,
           });
         }
@@ -386,6 +417,7 @@ export class SessionDerivation {
           ...(task?.output === undefined ? {} : { output: task.output }),
           ...(task?.worktree === undefined ? {} : { worktree: task.worktree }),
           ...(task?.blockedHosts === undefined ? {} : { blockedHosts: task.blockedHosts }),
+          ...(task?.allowedHosts === undefined ? {} : { allowedHosts: task.allowedHosts }),
           retryCount: task?.retryCount ?? 0,
           createdAt: task?.createdAt ?? event.at,
           updatedAt: event.at,

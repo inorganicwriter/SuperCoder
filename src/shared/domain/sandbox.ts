@@ -90,6 +90,7 @@ export const SandboxNetworkSchema = z
     caCertPath: z.string().trim().max(4096).optional(),
     allowlist: z.array(z.string().trim().min(1).max(256)).max(200).default(() => []),
     denylist: z.array(z.string().trim().min(1).max(256)).max(200).default(() => []),
+    auditOutbound: z.boolean().optional(),
   })
   .superRefine((network, ctx) => {
     if (network.mode === "proxy" && (network.proxyUrl === undefined || network.proxyUrl.trim() === "")) {
@@ -193,6 +194,7 @@ export function hasActiveProcessSandboxOverrides(profile: AgentSandboxProfile): 
     profile.network.mode !== "inherit" ||
     profile.network.allowlist.length > 0 ||
     profile.network.denylist.length > 0 ||
+    profile.network.auditOutbound === true ||
     (profile.network.caCertPath !== undefined && profile.network.caCertPath.trim() !== "") ||
     Object.keys(profile.env.set).length > 0 ||
     profile.env.secretKeys.length > 0 ||

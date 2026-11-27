@@ -193,6 +193,14 @@ export const METHODS = {
     }),
     result: AgentSandboxProfileSchema,
   },
+  "agent.sandbox.lockAllowlist": {
+    params: z.object({
+      agentId: z.string().min(1),
+      hosts: z.array(z.string().trim().min(1).max(256)).min(1).max(200),
+      merge: z.boolean().optional(),
+    }),
+    result: AgentSandboxProfileSchema,
+  },
   "agent.custom.list": {
     params: Empty,
     result: z.array(CustomAgentSchema),
