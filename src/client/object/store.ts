@@ -619,6 +619,16 @@ export class ClientStore {
     }
   }
 
+  async cleanupSandboxes(includeKeptWorktrees = false): Promise<MethodResult<"system.sandbox.cleanup"> | null> {
+    this.clearError();
+    try {
+      return await this.connection.rpc("system.sandbox.cleanup", { includeKeptWorktrees });
+    } catch (error) {
+      this.fail(error);
+      return null;
+    }
+  }
+
   async retryTask(taskId: string, confirmSideEffects: boolean): Promise<void> {
     const sessionId = this.state.activeSessionId;
     if (sessionId === null) return;

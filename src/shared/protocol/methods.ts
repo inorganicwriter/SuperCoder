@@ -280,6 +280,16 @@ export const METHODS = {
     params: z.object({ sessionId: z.string().optional() }),
     result: z.object({ path: z.string() }),
   },
+  "system.sandbox.cleanup": {
+    params: z.object({
+      includeKeptWorktrees: z.boolean().optional(),
+    }),
+    result: z.object({
+      worktreesRemoved: z.number().int().nonnegative(),
+      containersRemoved: z.number().int().nonnegative(),
+      tempDirsRemoved: z.number().int().nonnegative(),
+    }),
+  },
 } as const;
 
 export type MethodName = keyof typeof METHODS;

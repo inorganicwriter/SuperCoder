@@ -8,8 +8,8 @@ import { BUILTIN_TOOL_NAMES } from "../src/shared/domain/builtin-tools.js";
 
 describe("Core Protocol and Contract Specifications", () => {
   it("maintains consistent RPC method names and count", () => {
-    expect(METHOD_NAMES).toHaveLength(48);
-    expect(new Set(METHOD_NAMES).size).toBe(48);
+    expect(METHOD_NAMES).toHaveLength(49);
+    expect(new Set(METHOD_NAMES).size).toBe(49);
   });
 
   it("defines complete and immutable builtin tools collection", () => {

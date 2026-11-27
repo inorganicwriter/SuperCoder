@@ -19,6 +19,9 @@ import {
   applyTaskWorktree,
   createTaskWorktree,
   diffTaskWorktree,
+  pruneFinishedWorktrees,
+  readWorktreeMeta,
+  recoverOrphanedWorktrees,
   removeTaskWorktree,
 } from "../../src/host/workspace/worktree.js";
 import type { DelegationProvider } from "../../src/shared/domain/provider.js";
@@ -278,5 +281,55 @@ describe("Git Worktree Isolation & Auto-Merge", () => {
     expect(existsSync(join(repo, "a2.txt"))).toBe(true);
     expect(readFileSync(join(repo, "a1.txt"), "utf8").trim()).toBe("created by agent-1");
     expect(readFileSync(join(repo, "a2.txt"), "utf8").trim()).toBe("created by agent-2");
+  });
+
+  it("recovers crashed active worktrees on startup and prunes finished worktrees", async () => {
+    const temp = makeTempHome("sc-wt-recover-");
+    cleanups.push(async () => temp.cleanup());
+    const repo = initGitWorkspace();
+
+    const crashedKept = await createTaskWorktree({
+      worktreesDir: temp.paths.worktreesDir,
+      workspaceId: "ws1",
+      sessionId: "s1",
+      taskId: "t_crash_kept",
+      workspaceRoot: repo,
+    });
+    expect(crashedKept.ok).toBe(true);
+    if (!crashedKept.ok) return;
+    writeFileSync(join(crashedKept.value.worktreePath, "draft.txt"), "unsaved work\n", "utf8");
+
+    const crashedMissing = await createTaskWorktree({
+      worktreesDir: temp.paths.worktreesDir,
+      workspaceId: "ws1",
+      sessionId: "s1",
+      taskId: "t_crash_missing",
+      workspaceRoot: repo,
+    });
+    expect(crashedMissing.ok).toBe(true);
+    if (!crashedMissing.ok) return;
+    rmSync(crashedMissing.value.worktreePath, { recursive: true, force: true });
+
+    const recovery = await recoverOrphanedWorktrees(temp.paths.worktreesDir);
+    expect(recovery).toEqual({ recovered: 1, discarded: 1 });
+
+    const recoveredMeta = readWorktreeMeta(temp.paths.worktreesDir, "ws1", "t_crash_kept");
+    expect(recoveredMeta?.state).toBe("kept");
+    expect(recoveredMeta?.files).toContain("draft.txt");
+
+    const missingMeta = readWorktreeMeta(temp.paths.worktreesDir, "ws1", "t_crash_missing");
+    expect(missingMeta?.state).toBe("discarded");
+
+    // 默认 prune 只清理 merged/discarded，不动 kept
+    const pruneDefault = await pruneFinishedWorktrees(temp.paths.worktreesDir, { includeKept: false });
+    expect(pruneDefault.removed).toBe(1);
+    expect(readWorktreeMeta(temp.paths.worktreesDir, "ws1", "t_crash_missing")).toBeNull();
+    expect(readWorktreeMeta(temp.paths.worktreesDir, "ws1", "t_crash_kept")?.state).toBe("kept");
+
+    // includeKept: true 彻底清理遗留 kept 工作树、分支与元数据
+    const pruneAll = await pruneFinishedWorktrees(temp.paths.worktreesDir, { includeKept: true });
+    expect(pruneAll.removed).toBe(1);
+    expect(readWorktreeMeta(temp.paths.worktreesDir, "ws1", "t_crash_kept")).toBeNull();
+    expect(existsSync(crashedKept.value.worktreePath)).toBe(false);
   });
 });

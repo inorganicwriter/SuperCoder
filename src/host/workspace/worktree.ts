@@ -7,7 +7,7 @@
  * - 若有冲突或任务失败/中断，保留现场并生成 diff 供人工审阅、手动应用或丢弃。
  */
 
-import { existsSync, mkdirSync, readFileSync, rmSync } from "node:fs";
+import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import type { TaskWorktreeState } from "../../shared/domain/sandbox.js";
@@ -412,4 +412,133 @@ export async function removeTaskWorktree(
     state: finalState,
     ...(finalState === "discarded" ? { message: "已丢弃隔离工作区变更" } : {}),
   });
+}
+
+function isValidWorktreeMeta(value: unknown): value is WorktreeMeta {
+  if (typeof value !== "object" || value === null) return false;
+  const record = value as Record<string, unknown>;
+  return (
+    typeof record["taskId"] === "string" &&
+    typeof record["workspaceId"] === "string" &&
+    typeof record["workspaceRoot"] === "string" &&
+    typeof record["worktreePath"] === "string" &&
+    typeof record["branch"] === "string" &&
+    typeof record["state"] === "string"
+  );
+}
+
+function listWorktreeMetas(
+  worktreesDir: string,
+  workspaceId?: string,
+): Array<{ readonly metaFile: string; readonly meta: WorktreeMeta }> {
+  if (!existsSync(worktreesDir)) return [];
+  const wsDirs: string[] = [];
+  if (workspaceId !== undefined) {
+    if (!isSafeId(workspaceId)) return [];
+    const target = join(worktreesDir, workspaceId);
+    if (existsSync(target)) wsDirs.push(target);
+  } else {
+    try {
+      for (const entry of readdirSync(worktreesDir, { withFileTypes: true })) {
+        if (entry.isDirectory() && isSafeId(entry.name)) {
+          wsDirs.push(join(worktreesDir, entry.name));
+        }
+      }
+    } catch {
+      return [];
+    }
+  }
+
+  const out: Array<{ readonly metaFile: string; readonly meta: WorktreeMeta }> = [];
+  for (const dir of wsDirs) {
+    try {
+      for (const entry of readdirSync(dir, { withFileTypes: true })) {
+        if (!entry.isFile() || !entry.name.endsWith(".meta.json")) continue;
+        const metaFile = join(dir, entry.name);
+        try {
+          const parsed: unknown = JSON.parse(readFileSync(metaFile, "utf8"));
+          if (isValidWorktreeMeta(parsed)) {
+            out.push({ metaFile, meta: parsed });
+          }
+        } catch {
+          /* 忽略损坏的 meta 文件 */
+        }
+      }
+    } catch {
+      /* 忽略不可读工作区目录 */
+    }
+  }
+  return out;
+}
+
+/** 启动自愈：将崩溃遗留的 `active` 状态隔离工作区收敛为 `kept`（目录仍在）或 `discarded`（目录已删）。 */
+export async function recoverOrphanedWorktrees(
+  worktreesDir: string,
+  options?: { readonly activeTaskIds?: ReadonlySet<string> },
+): Promise<{ readonly recovered: number; readonly discarded: number }> {
+  let recovered = 0;
+  let discarded = 0;
+  for (const { meta } of listWorktreeMetas(worktreesDir)) {
+    if (meta.state !== "active") continue;
+    if (options?.activeTaskIds?.has(meta.taskId) === true) continue;
+    if (existsSync(meta.worktreePath)) {
+      const committed = await commitWorktreeChanges(meta).catch(() => null);
+      const files =
+        committed !== null && committed.ok ? committed.value.files : [...(meta.files ?? [])];
+      writeWorktreeMeta(worktreesDir, {
+        ...meta,
+        state: "kept",
+        files,
+        message: "宿主重启时发现中断的隔离工作区，已保留现场供审阅、合入或丢弃。",
+      });
+      recovered += 1;
+    } else {
+      if (existsSync(meta.workspaceRoot)) {
+        await cleanupWorktreeDirAndBranch(meta).catch(() => undefined);
+      }
+      writeWorktreeMeta(worktreesDir, {
+        ...meta,
+        state: "discarded",
+        message: "宿主重启时发现隔离工作区目录已不存在，已自动标记为丢弃。",
+      });
+      discarded += 1;
+    }
+  }
+  return { recovered, discarded };
+}
+
+/** 清理已结束（或开启 `includeKept` 时的遗留保留）worktree 目录、临时分支与元数据记录。 */
+export async function pruneFinishedWorktrees(
+  worktreesDir: string,
+  options?: { readonly workspaceId?: string; readonly includeKept?: boolean },
+): Promise<{ readonly removed: number }> {
+  let removed = 0;
+  const prunedRoots = new Set<string>();
+  const includeKept = options?.includeKept === true;
+  for (const { metaFile, meta } of listWorktreeMetas(worktreesDir, options?.workspaceId)) {
+    if (meta.state === "active") continue;
+    const isFinished = meta.state === "merged" || meta.state === "discarded";
+    const isKeptOrConflict = meta.state === "kept" || meta.state === "conflict";
+    if (!isFinished && !(includeKept && isKeptOrConflict)) continue;
+
+    if (
+      existsSync(meta.workspaceRoot) &&
+      (existsSync(meta.worktreePath) || isKeptOrConflict)
+    ) {
+      await cleanupWorktreeDirAndBranch(meta).catch(() => undefined);
+      prunedRoots.add(meta.workspaceRoot);
+    }
+    try {
+      rmSync(metaFile, { force: true });
+      removed += 1;
+    } catch {
+      /* 忽略删除元数据失败 */
+    }
+  }
+
+  for (const root of prunedRoots) {
+    if (!existsSync(root)) continue;
+    await runProcess("git", ["worktree", "prune"], { cwd: root, timeoutMs: 15_000 }).catch(() => undefined);
+  }
+  return { removed };
 }

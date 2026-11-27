@@ -73,7 +73,7 @@ describe("RPC Callable Surface", () => {
     try {
       const registered = fixture.host.router.methods().sort();
       expect(registered).toEqual(Object.keys(METHODS).sort());
-      expect(registered).toHaveLength(48);
+      expect(registered).toHaveLength(49);
     } finally {
       await fixture.cleanup();
     }
@@ -243,6 +243,11 @@ describe("RPC Callable Surface", () => {
       await fixture.call("agent.custom.remove", { id: "custom-cli" });
       expect(await fixture.call("agent.custom.list", {})).toEqual([]);
       expect((await fixture.call("agent.list", {})).some((a) => a.id === "custom-cli")).toBe(false);
+
+      const cleanupRes = await fixture.call("system.sandbox.cleanup", { includeKeptWorktrees: false });
+      expect(cleanupRes.worktreesRemoved).toBeGreaterThanOrEqual(0);
+      expect(cleanupRes.containersRemoved).toBeGreaterThanOrEqual(0);
+      expect(cleanupRes.tempDirsRemoved).toBeGreaterThanOrEqual(0);
     } finally {
       await fixture.cleanup();
     }

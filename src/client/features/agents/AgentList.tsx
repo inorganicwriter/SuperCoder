@@ -24,12 +24,42 @@ export function AgentRefreshButton(): JSX.Element {
 
 export function AgentList(): JSX.Element {
   const state = useClientState();
+  const store = useStore();
+  const [cleaning, setCleaning] = useState(false);
+  const [cleanupMsg, setCleanupMsg] = useState<string | null>(null);
   return (
     <section className={styles.section}>
       <p className={styles.notes}>{t("agent.modelHint")} {t("agent.permissionHint")}</p>
       {state.agents.length === 0 ? <p className={styles.hint}>{t("agent.none")}</p> : (
         <ul className={styles.list}>{state.agents.map((agent) => <AgentRow key={agent.id} agent={agent} />)}</ul>
       )}
+      <div className={styles.maintenanceBar}>
+        <button
+          type="button"
+          disabled={cleaning}
+          onClick={() => {
+            setCleaning(true);
+            setCleanupMsg(null);
+            void store
+              .cleanupSandboxes(false)
+              .then((res) => {
+                if (res === null) return;
+                const total = res.worktreesRemoved + res.containersRemoved + res.tempDirsRemoved;
+                if (total === 0) {
+                  setCleanupMsg(t("agent.cleanupNone"));
+                } else {
+                  setCleanupMsg(
+                    `${t("agent.cleanupResult")} ${res.worktreesRemoved} ${t("agent.cleanupWorktrees")} / ${res.containersRemoved} ${t("agent.cleanupContainers")} / ${res.tempDirsRemoved} ${t("agent.cleanupTempDirs")}`,
+                  );
+                }
+              })
+              .finally(() => setCleaning(false));
+          }}
+        >
+          {cleaning ? t("agent.cleanupRunning") : t("agent.cleanupBtn")}
+        </button>
+        {cleanupMsg !== null ? <span className={styles.hint}>{cleanupMsg}</span> : null}
+      </div>
       <CustomAgentPanel />
     </section>
   );

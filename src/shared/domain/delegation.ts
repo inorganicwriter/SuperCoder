@@ -102,7 +102,7 @@ export interface DelegationRequest {
   /** Runtime-only compiled sandbox environment variables; never serialize into events or logs. */
   readonly env?: Record<string, string | undefined>;
   /** Runtime-only Docker container isolation config; never serialize into events or logs. */
-  readonly docker?: DockerBackendConfig;
+  readonly docker?: DockerBackendConfig & { readonly ownerTag?: string };
   readonly effort?: string;
   readonly resumeSessionId?: string;
   readonly signal: AbortSignal;

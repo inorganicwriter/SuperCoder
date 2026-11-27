@@ -2,11 +2,15 @@
  * Docker 容器运行时命令行与 --env-file 安全构建测试（无需本机运行 Docker 守护进程）。
  */
 
-import { existsSync, readFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, utimesSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import {
+  DOCKER_OWNER_LABEL_KEY,
   SUPER_DOCKER_MANAGED_LABEL,
   buildDockerRunPlan,
+  cleanupStaleDockerEnvDirs,
   resolveContainerBinary,
   rewriteLoopbackUrlForDocker,
   rewriteProxyUrlForDocker,
@@ -63,6 +67,7 @@ describe("Docker runtime builder", () => {
           extraMounts: [{ host: "/host/cache", container: "/mnt/cache", readOnly: true }],
         }),
         workspaceReadOnly: true,
+        ownerTag: "owner123",
       },
       containerName: "sc-test-1",
     });
@@ -75,6 +80,7 @@ describe("Docker runtime builder", () => {
     expect(plan.args).toContain("--security-opt=no-new-privileges:true");
     expect(plan.args).toContain("--pids-limit=512");
     expect(plan.args).toContain(SUPER_DOCKER_MANAGED_LABEL);
+    expect(plan.args).toContain(`${DOCKER_OWNER_LABEL_KEY}=owner123`);
     expect(plan.args).toContain("--name");
     expect(plan.args).toContain("sc-test-1");
     expect(plan.args).toContain("--workdir");
@@ -156,5 +162,29 @@ describe("Docker runtime builder", () => {
     const emptyRes = await inspectDockerImage("   ");
     expect(emptyRes.exists).toBe(false);
     expect(emptyRes.reason).toBeTruthy();
+  });
+
+  it("removes stale sc-docker-env-* directories without touching fresh or unrelated dirs", () => {
+    const root = mkdtempSync(join(tmpdir(), "sc-env-clean-"));
+    disposables.push(() => rmSync(root, { recursive: true, force: true }));
+
+    const oldDir = join(root, "sc-docker-env-old");
+    const freshDir = join(root, "sc-docker-env-new");
+    const otherDir = join(root, "other-dir");
+    mkdirSync(oldDir);
+    mkdirSync(freshDir);
+    mkdirSync(otherDir);
+    writeFileSync(join(oldDir, "env.list"), "SECRET=1", "utf8");
+
+    const now = Date.now();
+    const past = new Date(now - 2 * 60 * 60 * 1000);
+    utimesSync(oldDir, past, past);
+    utimesSync(otherDir, past, past);
+
+    const removed = cleanupStaleDockerEnvDirs({ rootDir: root, maxAgeMs: 60 * 60 * 1000, now });
+    expect(removed).toBe(1);
+    expect(existsSync(oldDir)).toBe(false);
+    expect(existsSync(freshDir)).toBe(true);
+    expect(existsSync(otherDir)).toBe(true);
   });
 });

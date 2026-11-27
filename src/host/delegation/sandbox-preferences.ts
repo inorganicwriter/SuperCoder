@@ -41,11 +41,12 @@ export interface AgentSandboxPreferencesDeps {
   readonly file: string;
   readonly secrets: SecretStore;
   readonly sandboxesDir: string;
+  readonly dockerOwnerTag?: string;
 }
 
 export interface CompiledSandboxEnv {
   readonly env: NodeJS.ProcessEnv;
-  readonly docker?: DockerBackendConfig;
+  readonly docker?: DockerBackendConfig & { readonly ownerTag?: string };
   readonly dispose: () => void;
 }
 
@@ -428,6 +429,7 @@ export class AgentSandboxPreferences {
         ...dockerCfg,
         networkIsolation: effectiveIsolation,
         extraMounts,
+        ...(this.deps.dockerOwnerTag ? { ownerTag: this.deps.dockerOwnerTag } : {}),
       },
       dispose: () => {
         disposeScope?.();

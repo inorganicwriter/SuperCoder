@@ -11,7 +11,13 @@ import { spawn, spawnSync, type ChildProcess, type SpawnOptions } from "node:chi
 import { accessSync, constants, existsSync, readdirSync, statSync } from "node:fs";
 import { delimiter, dirname, isAbsolute, join } from "node:path";
 import { StringDecoder } from "node:string_decoder";
-import { buildDockerRunPlan, type DockerAvailability, type DockerRunSpec } from "./docker-runtime.js";
+import {
+  DOCKER_OWNER_LABEL_KEY,
+  SUPER_DOCKER_MANAGED_LABEL,
+  buildDockerRunPlan,
+  type DockerAvailability,
+  type DockerRunSpec,
+} from "./docker-runtime.js";
 
 /** 单个流的输出上限：够放一次验证/JSON 输出，又不至于把内存撑爆。 */
 const DEFAULT_MAX_OUTPUT_BYTES = 4 * 1024 * 1024;
@@ -677,6 +683,31 @@ export async function inspectDockerImage(image: string): Promise<DockerImageInsp
   } catch (error) {
     const msg = error instanceof Error ? error.message : String(error);
     return { exists: false, reason: msg.slice(0, 200) };
+  }
+}
+
+/** 清理带 SuperCoder 托管标签的孤儿容器（若指定 `ownerTag` 则仅清该实例名下容器），永不抛异常。 */
+export async function cleanupOrphanDockerContainers(ownerTag?: string): Promise<number> {
+  const args = ["ps", "-aq", "--filter", `label=${SUPER_DOCKER_MANAGED_LABEL}`];
+  const trimmedOwner = ownerTag?.trim() ?? "";
+  if (trimmedOwner !== "") {
+    args.push("--filter", `label=${DOCKER_OWNER_LABEL_KEY}=${trimmedOwner}`);
+  }
+  try {
+    const listed = await runProcess("docker", args, { cwd: process.cwd(), timeoutMs: 4000 });
+    if (listed.code !== 0 || listed.timedOut || listed.aborted) return 0;
+    const ids = listed.stdout
+      .split(/\r?\n/)
+      .map((line) => line.trim())
+      .filter((line) => /^[a-f0-9]{6,64}$/i.test(line));
+    if (ids.length === 0) return 0;
+    const removed = await runProcess("docker", ["rm", "-f", ...ids], {
+      cwd: process.cwd(),
+      timeoutMs: 10_000,
+    });
+    return removed.code === 0 ? ids.length : 0;
+  } catch {
+    return 0;
   }
 }
 

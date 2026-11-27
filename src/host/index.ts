@@ -7,7 +7,7 @@
 
 import { copyFileSync, existsSync, readdirSync, readFileSync } from "node:fs";
 import { rm } from "node:fs/promises";
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { homedir } from "node:os";
 import { dirname, join } from "node:path";
 import { METHODS, type MethodName } from "../shared/protocol/methods.js";
@@ -15,7 +15,8 @@ import { resultErr, type RpcResponse } from "../shared/protocol/rpc.js";
 import type { SessionEvent } from "../shared/session/events.js";
 import { ensureDir, writeJsonAtomic } from "./boot/atomic.js";
 import { DEFAULT_SETTINGS, SettingsStore, WorkspacesStore } from "./boot/config.js";
-import { detectDocker, inspectDockerImage, warmUninstallCache } from "./boot/exec.js";
+import { cleanupStaleDockerEnvDirs } from "./boot/docker-runtime.js";
+import { cleanupOrphanDockerContainers, detectDocker, inspectDockerImage, warmUninstallCache } from "./boot/exec.js";
 import { fail, messageOf } from "./boot/failure.js";
 import { createLogger, type Logger } from "./boot/logger.js";
 import { acquireInstanceLock, type LockOutcome } from "./boot/lock.js";
@@ -57,7 +58,9 @@ import { snapshotWorkspace } from "./workspace/snapshot.js";
 import {
   applyTaskWorktree,
   diffTaskWorktree,
+  pruneFinishedWorktrees,
   readWorktreeMeta,
+  recoverOrphanedWorktrees,
   removeTaskWorktree,
 } from "./workspace/worktree.js";
 
@@ -126,12 +129,14 @@ export async function startHost(options: HostOptions = {}): Promise<RunningHost>
 
   const locks = new WorkspaceLocks();
   const networkProxy = new AgentNetworkProxy();
+  const dockerOwnerTag = createHash("sha256").update(paths.home).digest("hex").slice(0, 12);
   const customAgents = new CustomAgentsStore(join(paths.home, "agents.json"));
   const agentPermissions = new AgentPermissionPreferences(join(paths.home, "agent-permissions.json"));
   const agentSandboxes = new AgentSandboxPreferences({
     file: join(paths.home, "agent-sandboxes.json"),
     secrets,
     sandboxesDir: paths.sandboxesDir,
+    dockerOwnerTag,
   });
   const select = new ProviderSelect(
     () =>
@@ -708,6 +713,20 @@ export async function startHost(options: HostOptions = {}): Promise<RunningHost>
   router.register("diagnostics.export", (params) => ({
     path: exportDiagnostics(paths, params.sessionId, logger),
   }));
+  router.register("system.sandbox.cleanup", async (params) => {
+    const wt = await pruneFinishedWorktrees(
+      paths.worktreesDir,
+      params.includeKeptWorktrees === undefined ? undefined : { includeKept: params.includeKeptWorktrees },
+    );
+    const tempDirsRemoved = cleanupStaleDockerEnvDirs();
+    const containersRemoved =
+      runner.inflightIds().length === 0 ? await cleanupOrphanDockerContainers(dockerOwnerTag) : 0;
+    return {
+      worktreesRemoved: wt.removed,
+      containersRemoved,
+      tempDirsRemoved,
+    };
+  });
 
   assertFullCoverage(router);
   assertMethodCount();
@@ -747,6 +766,28 @@ export async function startHost(options: HostOptions = {}): Promise<RunningHost>
     logger.warn({ error: messageOf(error) }, "MCP 自动连接失败");
   });
 
+  void (async () => {
+    try {
+      const activeIds = new Set(runner.inflightIds());
+      const [wt, tempDirs] = await Promise.all([
+        recoverOrphanedWorktrees(paths.worktreesDir, { activeTaskIds: activeIds }),
+        Promise.resolve(cleanupStaleDockerEnvDirs()),
+      ]);
+      const containers =
+        options.skipInstanceLock !== true && runner.inflightIds().length === 0
+          ? await cleanupOrphanDockerContainers(dockerOwnerTag)
+          : 0;
+      if (wt.recovered > 0 || wt.discarded > 0 || tempDirs > 0 || containers > 0) {
+        logger.info(
+          { recoveredWorktrees: wt.recovered, discardedWorktrees: wt.discarded, tempDirs, containers },
+          "启动时自愈清理孤儿沙箱资源",
+        );
+      }
+    } catch (error) {
+      logger.warn({ error: messageOf(error) }, "启动自愈清理孤儿沙箱资源失败");
+    }
+  })();
+
   return {
     port: channel.port,
     url: channel.url,
@@ -776,7 +817,7 @@ export async function startHost(options: HostOptions = {}): Promise<RunningHost>
 /** 方法数量变化时同步检查协议与注册面。 */
 function assertMethodCount(): void {
   const count = Object.keys(METHODS).length;
-  if (count !== 48) throw new Error(`RPC 方法数量应为 48，实际 ${count}`);
+  if (count !== 49) throw new Error(`RPC 方法数量应为 49，实际 ${count}`);
 }
 
 /** 诊断包：脱敏设置 + 会话日志 + 说明；不含任何密钥。 */

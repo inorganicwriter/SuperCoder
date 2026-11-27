@@ -7,7 +7,7 @@
  */
 
 import { randomBytes } from "node:crypto";
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdtempSync, readdirSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { DockerBackendConfig } from "../../shared/domain/sandbox.js";
@@ -21,9 +21,12 @@ export interface DockerAvailability {
 export interface DockerRunSpec extends DockerBackendConfig {
   /** 只读任务或探测操作时以 `:ro` 挂载工作区，内核级禁止写入。 */
   readonly workspaceReadOnly?: boolean;
+  /** 关联当前 SuperCoder 数据目录的实例标签，仅清理归属本实例的容器。 */
+  readonly ownerTag?: string;
 }
 
 export const SUPER_DOCKER_MANAGED_LABEL = "supercoder.managed=true";
+export const DOCKER_OWNER_LABEL_KEY = "supercoder.owner";
 
 export interface DockerRunPlanInput {
   readonly bin: string;
@@ -136,6 +139,9 @@ export function buildDockerRunPlan(input: DockerRunPlanInput): DockerRunPlan {
     "--pids-limit=512",
     "--label",
     SUPER_DOCKER_MANAGED_LABEL,
+    ...(input.docker.ownerTag !== undefined && input.docker.ownerTag.trim() !== ""
+      ? ["--label", `${DOCKER_OWNER_LABEL_KEY}=${input.docker.ownerTag.trim()}`]
+      : []),
     "--name",
     containerName,
     "--workdir",
@@ -179,4 +185,34 @@ export function buildDockerRunPlan(input: DockerRunPlanInput): DockerRunPlan {
     envFilePath,
     dispose,
   };
+}
+
+/** 清理崩溃遗留的 `sc-docker-env-*` 临时目录；默认仅清超过 1 小时的陈旧目录，永不抛异常。 */
+export function cleanupStaleDockerEnvDirs(options?: {
+  readonly rootDir?: string;
+  readonly maxAgeMs?: number;
+  readonly now?: number;
+}): number {
+  const rootDir = options?.rootDir ?? tmpdir();
+  const maxAgeMs = options?.maxAgeMs ?? 60 * 60 * 1000;
+  const now = options?.now ?? Date.now();
+  let removed = 0;
+  try {
+    const entries = readdirSync(rootDir, { withFileTypes: true });
+    for (const entry of entries) {
+      if (!entry.isDirectory() || !entry.name.startsWith("sc-docker-env-")) continue;
+      const fullPath = join(rootDir, entry.name);
+      try {
+        const mtimeMs = statSync(fullPath).mtimeMs;
+        if (now - mtimeMs < maxAgeMs) continue;
+        rmSync(fullPath, { recursive: true, force: true });
+        removed += 1;
+      } catch {
+        /* 忽略单个临时目录无权限或已被并发删除的情况 */
+      }
+    }
+  } catch {
+    return removed;
+  }
+  return removed;
 }
