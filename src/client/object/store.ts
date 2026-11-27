@@ -658,6 +658,26 @@ export class ClientStore {
     }
   }
 
+  async resolveWorktreeConflict(task: TaskView): Promise<boolean> {
+    const diff = await this.diffTaskWorktree(task.taskId);
+    if (diff === null) return false;
+    const rawPatch = diff.patch.trim() !== "" ? diff.patch : diff.stat.trim() !== "" ? diff.stat : t("task.worktreeEmptyDiff");
+    const patch = rawPatch.length > 12_000 ? `${rawPatch.slice(0, 12_000)}\n... (truncated)` : rawPatch;
+    const filesText =
+      diff.files.length > 0
+        ? diff.files.join(", ")
+        : (task.worktree?.files ?? []).join(", ") || "-";
+    const prompt = t("task.worktreeResolvePrompt")
+      .replace("{taskId}", () => task.taskId)
+      .replace("{agent}", () => task.agentId)
+      .replace("{goal}", () => task.goal)
+      .replace("{branch}", () => diff.branch ?? task.worktree?.branch ?? "-")
+      .replace("{message}", () => diff.message ?? task.worktree?.message ?? "-")
+      .replace("{files}", () => filesText)
+      .replace("{patch}", () => patch);
+    return await this.send(prompt);
+  }
+
   async cleanupSandboxes(includeKeptWorktrees = false): Promise<MethodResult<"system.sandbox.cleanup"> | null> {
     this.clearError();
     try {

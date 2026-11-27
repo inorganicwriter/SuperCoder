@@ -358,4 +358,8 @@ export const en: Record<LocaleKey, string> = {
   "task.worktreeApplying": "Applying…",
   "task.worktreeDiscard": "Discard",
   "task.worktreeEmptyDiff": "No diff changes",
+  "task.worktreeResolveAi": "Resolve with AI",
+  "task.worktreeResolvingAi": "Starting…",
+  "task.worktreeResolveSent": "Sent conflict resolution request to the main agent. Discard the worktree once merged.",
+  "task.worktreeResolvePrompt": "Isolated task {taskId} (agent: {agent}, goal: {goal}, branch: {branch}) hit a merge conflict when applying to the main workspace.\nConflict detail: {message}\nAffected files: {files}\n\nWorktree patch:\n```diff\n{patch}\n```\n\nPlease inspect the current files in the main workspace alongside this patch, merge both sets of changes cleanly into the main workspace without conflict markers, and summarize the resolution.",
 };

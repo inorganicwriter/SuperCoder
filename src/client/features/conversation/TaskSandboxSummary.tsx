@@ -28,6 +28,7 @@ export function TaskSandboxSummary({
   const [diffText, setDiffText] = useState<string | null>(null);
   const [diffOpen, setDiffOpen] = useState(false);
   const [applying, setApplying] = useState(false);
+  const [resolvingAi, setResolvingAi] = useState(false);
   const [actionMsg, setActionMsg] = useState<string | null>(null);
   const [allowedHosts, setAllowedHosts] = useState<readonly string[]>([]);
   const [lockedAllowlist, setLockedAllowlist] = useState(false);
@@ -76,6 +77,19 @@ export function TaskSandboxSummary({
     if (discarded) {
       setDiffOpen(false);
       setDiffText(null);
+    }
+  };
+
+  const resolveWithAi = async (): Promise<void> => {
+    setResolvingAi(true);
+    setActionMsg(null);
+    try {
+      const sent = await store.resolveWorktreeConflict(task);
+      if (sent) {
+        setActionMsg(t("task.worktreeResolveSent"));
+      }
+    } finally {
+      setResolvingAi(false);
     }
   };
 
@@ -143,10 +157,15 @@ export function TaskSandboxSummary({
           <button type="button" onClick={() => void toggleDiff()}>
             {diffOpen ? t("task.worktreeHideDiff") : t("task.worktreeViewDiff")}
           </button>
-          <button type="button" disabled={applying} onClick={() => void applyWorktree()}>
+          <button type="button" disabled={applying || resolvingAi} onClick={() => void applyWorktree()}>
             {applying ? t("task.worktreeApplying") : t("task.worktreeApply")}
           </button>
-          <button type="button" disabled={applying} onClick={() => void discardWorktree()}>
+          {worktree?.state === "conflict" ? (
+            <button type="button" disabled={applying || resolvingAi} onClick={() => void resolveWithAi()}>
+              {resolvingAi ? t("task.worktreeResolvingAi") : t("task.worktreeResolveAi")}
+            </button>
+          ) : null}
+          <button type="button" disabled={applying || resolvingAi} onClick={() => void discardWorktree()}>
             {t("task.worktreeDiscard")}
           </button>
         </div>

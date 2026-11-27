@@ -332,4 +332,103 @@ describe("Git Worktree Isolation & Auto-Merge", () => {
     expect(readWorktreeMeta(temp.paths.worktreesDir, "ws1", "t_crash_kept")).toBeNull();
     expect(existsSync(crashedKept.value.worktreePath)).toBe(false);
   });
+
+  it("auto-merges non-overlapping edits on the same file via 3-way fallback", async () => {
+    const temp = makeTempHome("sc-wt-3way-");
+    cleanups.push(async () => temp.cleanup());
+    const repo = initGitWorkspace();
+
+    // 写入 4 行文本并提交，确保第 1 行与第 4 行处于 git diff 3 行上下文重叠区间内
+    writeFileSync(join(repo, "shared.txt"), "line1\nline2\nline3\nline4\n", "utf8");
+    execFileSync("git", ["add", "shared.txt"], { cwd: repo });
+    execFileSync("git", ["commit", "--quiet", "-m", "four lines"], { cwd: repo });
+
+    const wtA = await createTaskWorktree({
+      worktreesDir: temp.paths.worktreesDir,
+      workspaceId: "ws1",
+      sessionId: "s1",
+      taskId: "t_three_a",
+      workspaceRoot: repo,
+    });
+    const wtB = await createTaskWorktree({
+      worktreesDir: temp.paths.worktreesDir,
+      workspaceId: "ws1",
+      sessionId: "s1",
+      taskId: "t_three_b",
+      workspaceRoot: repo,
+    });
+    expect(wtA.ok && wtB.ok).toBe(true);
+    if (!wtA.ok || !wtB.ok) return;
+
+    writeFileSync(join(wtA.value.worktreePath, "shared.txt"), "line1-from-A\nline2\nline3\nline4\n", "utf8");
+    writeFileSync(join(wtB.value.worktreePath, "shared.txt"), "line1\nline2\nline3\nline4-from-B\n", "utf8");
+
+    const appliedA = await applyTaskWorktree(temp.paths.worktreesDir, wtA.value);
+    expect(appliedA.applied).toBe(true);
+
+    const appliedB = await applyTaskWorktree(temp.paths.worktreesDir, wtB.value);
+    expect(appliedB.applied).toBe(true);
+    expect(appliedB.message).toContain("三方合并");
+
+    const mergedText = readFileSync(join(repo, "shared.txt"), "utf8").replace(/\r\n/g, "\n");
+    expect(mergedText).toBe("line1-from-A\nline2\nline3\nline4-from-B\n");
+    expect(mergedText).not.toContain("<<<<<<<");
+    expect(existsSync(wtB.value.worktreePath)).toBe(false);
+    expect(execFileSync("git", ["diff", "--cached", "--name-only"], { cwd: repo, encoding: "utf8" }).trim()).toBe("");
+  });
+
+  it("keeps main workspace and git index clean on true conflicts or binary conflicts", async () => {
+    const temp = makeTempHome("sc-wt-atomic-");
+    cleanups.push(async () => temp.cleanup());
+    const repo = initGitWorkspace();
+
+    // 二进制基线文件
+    writeFileSync(join(repo, "bin.dat"), Buffer.from([0x00, 0x01, 0x02, 0x03]));
+    execFileSync("git", ["add", "bin.dat"], { cwd: repo });
+    execFileSync("git", ["commit", "--quiet", "-m", "add bin"], { cwd: repo });
+
+    const wtConflict = await createTaskWorktree({
+      worktreesDir: temp.paths.worktreesDir,
+      workspaceId: "ws1",
+      sessionId: "s1",
+      taskId: "t_atomic_conflict",
+      workspaceRoot: repo,
+    });
+    expect(wtConflict.ok).toBe(true);
+    if (!wtConflict.ok) return;
+
+    writeFileSync(join(repo, "shared.txt"), "line1-main\nline2\nline3\n", "utf8");
+    writeFileSync(join(wtConflict.value.worktreePath, "shared.txt"), "line1-agent\nline2\nline3\n", "utf8");
+    writeFileSync(join(wtConflict.value.worktreePath, "extra.txt"), "should not leak to main\n", "utf8");
+
+    const res = await applyTaskWorktree(temp.paths.worktreesDir, wtConflict.value);
+    expect(res.applied).toBe(false);
+    if (!res.applied) expect(res.conflict).toBe(true);
+    expect(res.message).toContain("shared.txt");
+    expect(readFileSync(join(repo, "shared.txt"), "utf8")).toBe("line1-main\nline2\nline3\n");
+    expect(readFileSync(join(repo, "shared.txt"), "utf8")).not.toContain("<<<<<<<");
+    expect(existsSync(join(repo, "extra.txt"))).toBe(false);
+    expect(execFileSync("git", ["diff", "--cached", "--name-only"], { cwd: repo, encoding: "utf8" }).trim()).toBe("");
+    await removeTaskWorktree(temp.paths.worktreesDir, wtConflict.value, "discarded");
+
+    // 二进制冲突安全回退
+    const wtBin = await createTaskWorktree({
+      worktreesDir: temp.paths.worktreesDir,
+      workspaceId: "ws1",
+      sessionId: "s1",
+      taskId: "t_bin_conflict",
+      workspaceRoot: repo,
+    });
+    expect(wtBin.ok).toBe(true);
+    if (!wtBin.ok) return;
+
+    writeFileSync(join(repo, "bin.dat"), Buffer.from([0x00, 0x01, 0xaa, 0x03]));
+    writeFileSync(join(wtBin.value.worktreePath, "bin.dat"), Buffer.from([0x00, 0x01, 0xbb, 0x03]));
+
+    const binRes = await applyTaskWorktree(temp.paths.worktreesDir, wtBin.value);
+    expect(binRes.applied).toBe(false);
+    if (!binRes.applied) expect(binRes.conflict).toBe(true);
+    expect(readFileSync(join(repo, "bin.dat"))).toEqual(Buffer.from([0x00, 0x01, 0xaa, 0x03]));
+    await removeTaskWorktree(temp.paths.worktreesDir, wtBin.value, "discarded");
+  });
 });

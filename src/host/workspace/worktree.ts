@@ -7,9 +7,9 @@
  * - 若有冲突或任务失败/中断，保留现场并生成 diff 供人工审阅、手动应用或丢弃。
  */
 
-import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync } from "node:fs";
+import { existsSync, lstatSync, mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { dirname, join } from "node:path";
+import { dirname, isAbsolute, join, relative, resolve } from "node:path";
 import type { TaskWorktreeState } from "../../shared/domain/sandbox.js";
 import { err, ok, type Result } from "../../shared/result.js";
 import { ensureDir, writeJsonAtomic } from "../boot/atomic.js";
@@ -302,6 +302,268 @@ async function cleanupWorktreeDirAndBranch(meta: WorktreeMeta): Promise<void> {
   });
 }
 
+interface RawDiffEntry {
+  readonly oldMode: string;
+  readonly newMode: string;
+  readonly status: string;
+  readonly path: string;
+}
+
+type PlannedMergeOp =
+  | { readonly kind: "write"; readonly path: string; readonly content: Buffer }
+  | { readonly kind: "delete"; readonly path: string };
+
+type ThreeWayMergeResult =
+  | { readonly ok: true }
+  | { readonly ok: false; readonly conflictingFiles: string[]; readonly error?: string };
+
+function resolveInsideRoot(root: string, relPath: string): string | null {
+  const resolvedRoot = resolve(root);
+  const resolved = resolve(resolvedRoot, relPath);
+  const rel = relative(resolvedRoot, resolved);
+  if (rel === "" || rel.startsWith("..") || isAbsolute(rel)) return null;
+  return resolved;
+}
+
+function inspectPathKind(target: string): "missing" | "file" | "other" {
+  try {
+    const st = lstatSync(target);
+    return st.isFile() ? "file" : "other";
+  } catch {
+    return "missing";
+  }
+}
+
+function parseRawDiffZ(stdout: string): RawDiffEntry[] | null {
+  const tokens = stdout.split("\0");
+  const entries: RawDiffEntry[] = [];
+  for (let i = 0; i < tokens.length; i += 2) {
+    const header = tokens[i] ?? "";
+    if (header === "") break;
+    const filePath = tokens[i + 1] ?? "";
+    if (filePath === "") return null;
+    const match = /^:([0-7]+)\s+([0-7]+)\s+[0-9a-f]+\s+[0-9a-f]+\s+([A-Z]\d*)$/.exec(header);
+    if (match === null) return null;
+    entries.push({
+      oldMode: match[1]!,
+      newMode: match[2]!,
+      status: match[3]!,
+      path: filePath,
+    });
+  }
+  return entries;
+}
+
+function parseBinaryNumstatZ(stdout: string): Set<string> {
+  const binaries = new Set<string>();
+  for (const record of stdout.split("\0")) {
+    if (record === "") continue;
+    const match = /^-\t-\t(.+)$/.exec(record);
+    if (match !== null) binaries.add(match[1]!);
+  }
+  return binaries;
+}
+
+/**
+ * 零污染三方文本自动合并回退：
+ * - 全部读取与 `git merge-file -p` 计算在临时目录完成，不写入 `.git/index` 或未完成文件；
+ * - 对二进制、重命名/符号链接、路径越界或任意冲突文件整批拒绝，全部无冲突后原子落盘并支持回滚。
+ */
+async function tryThreeWayMerge(
+  meta: WorktreeMeta,
+  commitRef: string,
+): Promise<ThreeWayMergeResult> {
+  const [rawRes, numstatRes] = await Promise.all([
+    runProcess(
+      "git",
+      ["diff", "--raw", "-z", "--no-renames", meta.baseCommit, commitRef],
+      { cwd: meta.worktreePath, timeoutMs: 20_000 },
+    ),
+    runProcess(
+      "git",
+      ["diff", "--numstat", "-z", "--no-renames", meta.baseCommit, commitRef],
+      { cwd: meta.worktreePath, timeoutMs: 20_000 },
+    ),
+  ]);
+  if (rawRes.code !== 0 || rawRes.overflowed || numstatRes.code !== 0 || numstatRes.overflowed) {
+    return { ok: false, conflictingFiles: [], error: "读取隔离工作区差异元数据失败" };
+  }
+
+  const entries = parseRawDiffZ(rawRes.stdout);
+  if (entries === null || entries.length === 0) {
+    return { ok: false, conflictingFiles: [], error: "解析隔离工作区变更列表失败" };
+  }
+  const binaryFiles = parseBinaryNumstatZ(numstatRes.stdout);
+
+  const mergeDir = join(
+    tmpdir(),
+    `supercoder-merge-${meta.taskId}-${Date.now()}-${Math.random().toString(16).slice(2, 8)}`,
+  );
+  mkdirSync(mergeDir, { recursive: true });
+
+  const plannedOps: PlannedMergeOp[] = [];
+  const conflictingFiles: string[] = [];
+
+  try {
+    for (let index = 0; index < entries.length; index += 1) {
+      const entry = entries[index]!;
+      if (
+        (entry.status !== "A" && entry.status !== "M" && entry.status !== "D") ||
+        entry.oldMode === "120000" ||
+        entry.newMode === "120000" ||
+        entry.oldMode === "160000" ||
+        entry.newMode === "160000"
+      ) {
+        conflictingFiles.push(entry.path);
+        continue;
+      }
+
+      const mainPath = resolveInsideRoot(meta.workspaceRoot, entry.path);
+      const wtPath = resolveInsideRoot(meta.worktreePath, entry.path);
+      if (mainPath === null || wtPath === null) {
+        conflictingFiles.push(entry.path);
+        continue;
+      }
+
+      if (entry.status === "A") {
+        if (inspectPathKind(wtPath) !== "file") {
+          conflictingFiles.push(entry.path);
+          continue;
+        }
+        const mainKind = inspectPathKind(mainPath);
+        if (mainKind === "other") {
+          conflictingFiles.push(entry.path);
+          continue;
+        }
+        const theirsBuf = readFileSync(wtPath);
+        if (mainKind === "missing") {
+          plannedOps.push({ kind: "write", path: mainPath, content: theirsBuf });
+        } else if (!readFileSync(mainPath).equals(theirsBuf)) {
+          conflictingFiles.push(entry.path);
+        }
+        continue;
+      }
+
+      if (entry.status === "D") {
+        const mainKind = inspectPathKind(mainPath);
+        if (mainKind === "missing") continue;
+        if (mainKind === "other" || binaryFiles.has(entry.path)) {
+          conflictingFiles.push(entry.path);
+          continue;
+        }
+        const oursBuf = readFileSync(mainPath);
+        if (oursBuf.includes(0)) {
+          conflictingFiles.push(entry.path);
+          continue;
+        }
+        const baseRes = await runProcess("git", ["show", `${meta.baseCommit}:${entry.path}`], {
+          cwd: meta.worktreePath,
+          timeoutMs: 20_000,
+        });
+        if (
+          baseRes.code !== 0 ||
+          baseRes.overflowed ||
+          oursBuf.toString("utf8").replace(/\r\n/g, "\n") !== baseRes.stdout.replace(/\r\n/g, "\n")
+        ) {
+          conflictingFiles.push(entry.path);
+          continue;
+        }
+        plannedOps.push({ kind: "delete", path: mainPath });
+        continue;
+      }
+
+      // entry.status === "M"
+      if (inspectPathKind(mainPath) !== "file" || inspectPathKind(wtPath) !== "file" || binaryFiles.has(entry.path)) {
+        conflictingFiles.push(entry.path);
+        continue;
+      }
+      const oursBuf = readFileSync(mainPath);
+      const theirsBuf = readFileSync(wtPath);
+      if (oursBuf.includes(0) || theirsBuf.includes(0)) {
+        conflictingFiles.push(entry.path);
+        continue;
+      }
+      const baseRes = await runProcess("git", ["show", `${meta.baseCommit}:${entry.path}`], {
+        cwd: meta.worktreePath,
+        timeoutMs: 20_000,
+      });
+      if (baseRes.code !== 0 || baseRes.overflowed) {
+        conflictingFiles.push(entry.path);
+        continue;
+      }
+
+      const oursText = oursBuf.toString("utf8");
+      const oursHadCrlf = oursText.includes("\r\n");
+      const oursTmp = join(mergeDir, `${index}.ours`);
+      const baseTmp = join(mergeDir, `${index}.base`);
+      const theirsTmp = join(mergeDir, `${index}.theirs`);
+      writeFileSync(oursTmp, oursText.replace(/\r\n/g, "\n"), "utf8");
+      writeFileSync(baseTmp, baseRes.stdout.replace(/\r\n/g, "\n"), "utf8");
+      writeFileSync(theirsTmp, theirsBuf.toString("utf8").replace(/\r\n/g, "\n"), "utf8");
+
+      const merged = await runProcess("git", ["merge-file", "-p", oursTmp, baseTmp, theirsTmp], {
+        cwd: mergeDir,
+        timeoutMs: 20_000,
+      });
+      if (merged.code === 0 && !merged.overflowed) {
+        const normalized = merged.stdout.replace(/\r\n/g, "\n");
+        const finalText = oursHadCrlf ? normalized.replace(/\n/g, "\r\n") : normalized;
+        plannedOps.push({ kind: "write", path: mainPath, content: Buffer.from(finalText, "utf8") });
+      } else {
+        conflictingFiles.push(entry.path);
+      }
+    }
+
+    if (conflictingFiles.length > 0) {
+      return { ok: false, conflictingFiles };
+    }
+
+    const backups: Array<{ readonly path: string; readonly existed: boolean; readonly content?: Buffer }> = [];
+    const seenPaths = new Set<string>();
+    try {
+      for (const op of plannedOps) {
+        const existed = existsSync(op.path);
+        if (!seenPaths.has(op.path)) {
+          seenPaths.add(op.path);
+          backups.push(
+            existed
+              ? { path: op.path, existed: true, content: readFileSync(op.path) }
+              : { path: op.path, existed: false },
+          );
+        }
+        if (op.kind === "write") {
+          ensureDir(dirname(op.path));
+          writeFileSync(op.path, op.content);
+        } else if (existed) {
+          rmSync(op.path, { force: true });
+        }
+      }
+      return { ok: true };
+    } catch (error) {
+      for (let i = backups.length - 1; i >= 0; i -= 1) {
+        const backup = backups[i]!;
+        try {
+          if (backup.existed && backup.content !== undefined) {
+            ensureDir(dirname(backup.path));
+            writeFileSync(backup.path, backup.content);
+          } else {
+            rmSync(backup.path, { force: true });
+          }
+        } catch {
+          /* 尽力回滚 */
+        }
+      }
+      return {
+        ok: false,
+        conflictingFiles: [],
+        error: error instanceof Error ? error.message : String(error),
+      };
+    }
+  } finally {
+    rmSync(mergeDir, { recursive: true, force: true });
+  }
+}
+
 export async function applyTaskWorktree(
   worktreesDir: string,
   meta: WorktreeMeta,
@@ -367,8 +629,27 @@ export async function applyTaskWorktree(
       { cwd: meta.workspaceRoot, timeoutMs: 30_000 },
     );
     if (check.code !== 0) {
-      const detail = (check.stderr || check.stdout).trim().slice(0, 400);
-      const msg = `与主工作区存在冲突，已保留隔离工作区（分支 ${meta.branch}）：${detail || "git apply 校验失败"}`;
+      const threeWay = await tryThreeWayMerge(meta, snapshot.commitRef);
+      if (threeWay.ok) {
+        if (options.removeOnSuccess !== false) {
+          await cleanupWorktreeDirAndBranch(meta);
+        }
+        const msg = `已通过三方合并自动合入 ${snapshot.files.length} 个文件`;
+        writeWorktreeMeta(worktreesDir, {
+          ...meta,
+          state: "merged",
+          files: snapshot.files,
+          message: msg,
+        });
+        return { applied: true, files: snapshot.files, message: msg };
+      }
+
+      const detail = (threeWay.error || check.stderr || check.stdout).trim().slice(0, 400);
+      const conflictHint =
+        threeWay.conflictingFiles.length > 0
+          ? `（冲突文件：${threeWay.conflictingFiles.join(", ")}）`
+          : "";
+      const msg = `与主工作区存在冲突${conflictHint}，已保留隔离工作区（分支 ${meta.branch}）：${detail || "git apply 与三方合并均检测到冲突"}`;
       writeWorktreeMeta(worktreesDir, { ...meta, state: "conflict", files: snapshot.files, message: msg });
       return { applied: false, conflict: true, files: snapshot.files, message: msg };
     }

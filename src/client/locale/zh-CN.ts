@@ -358,6 +358,10 @@ export const zhCN = {
   "task.worktreeApplying": "正在合入…",
   "task.worktreeDiscard": "丢弃隔离改动",
   "task.worktreeEmptyDiff": "暂无文件差异",
+  "task.worktreeResolveAi": "AI 解决冲突",
+  "task.worktreeResolvingAi": "正在发起…",
+  "task.worktreeResolveSent": "已向主 Agent 发起冲突解决请求，确认合并完成后可丢弃该隔离工作区。",
+  "task.worktreeResolvePrompt": "隔离任务 {taskId}（执行者：{agent}，目标：{goal}，分支：{branch}）自动合入主工作区时发生冲突。\n冲突说明：{message}\n涉及文件：{files}\n\n隔离工作区补丁如下：\n```diff\n{patch}\n```\n\n请检查主工作区上述文件的当前内容并对照该补丁，保留双方有效修改、去除冲突标记后将最终结果直接写入主工作区对应文件，并在完成后简要说明合并结果。",
 } as const;
 
 export type LocaleKey = keyof typeof zhCN;
