@@ -5,10 +5,13 @@
 import { existsSync, readFileSync } from "node:fs";
 import { afterEach, describe, expect, it } from "vitest";
 import {
+  SUPER_DOCKER_MANAGED_LABEL,
   buildDockerRunPlan,
   resolveContainerBinary,
+  rewriteLoopbackUrlForDocker,
   rewriteProxyUrlForDocker,
 } from "../../src/host/boot/docker-runtime.js";
+import { inspectDockerImage } from "../../src/host/boot/exec.js";
 import { DockerBackendConfigSchema } from "../../src/shared/domain/sandbox.js";
 
 const disposables: Array<() => void> = [];
@@ -33,6 +36,12 @@ describe("Docker runtime builder", () => {
     expect(rewriteProxyUrlForDocker("https://proxy.corp.example:8443")).toBe(
       "https://proxy.corp.example:8443",
     );
+    expect(rewriteLoopbackUrlForDocker("http://127.0.0.1:11434/v1")).toBe(
+      "http://host.docker.internal:11434/v1",
+    );
+    expect(rewriteLoopbackUrlForDocker("http://localhost:8000/v1/")).toBe(
+      "http://host.docker.internal:8000/v1/",
+    );
   });
 
   it("writes secrets only to 0600 env-file and builds isolated proxy-only docker run args", () => {
@@ -44,14 +53,17 @@ describe("Docker runtime builder", () => {
         HTTP_PROXY: "http://claude-code:tok@host.docker.internal:18080",
         API_SECRET: "super-secret-value\nINJECTED=bad",
       },
-      docker: DockerBackendConfigSchema.parse({
-        image: "ghcr.io/example/agent:latest",
-        networkIsolation: "proxy-only",
-        memoryLimit: "2g",
-        cpuLimit: 2,
-        readOnlyRoot: true,
-        extraMounts: [{ host: "/host/cache", container: "/mnt/cache", readOnly: true }],
-      }),
+      docker: {
+        ...DockerBackendConfigSchema.parse({
+          image: "ghcr.io/example/agent:latest",
+          networkIsolation: "proxy-only",
+          memoryLimit: "2g",
+          cpuLimit: 2,
+          readOnlyRoot: true,
+          extraMounts: [{ host: "/host/cache", container: "/mnt/cache", readOnly: true }],
+        }),
+        workspaceReadOnly: true,
+      },
       containerName: "sc-test-1",
     });
     disposables.push(plan.dispose);
@@ -59,11 +71,15 @@ describe("Docker runtime builder", () => {
     expect(plan.bin).toBe("docker");
     expect(plan.args).toContain("--rm");
     expect(plan.args).toContain("--init");
+    expect(plan.args).toContain("--cap-drop=ALL");
+    expect(plan.args).toContain("--security-opt=no-new-privileges:true");
+    expect(plan.args).toContain("--pids-limit=512");
+    expect(plan.args).toContain(SUPER_DOCKER_MANAGED_LABEL);
     expect(plan.args).toContain("--name");
     expect(plan.args).toContain("sc-test-1");
     expect(plan.args).toContain("--workdir");
     expect(plan.args).toContain("/workspace");
-    expect(plan.args).toContain("D:\\Repo\\MyProject:/workspace");
+    expect(plan.args).toContain("D:\\Repo\\MyProject:/workspace:ro");
     expect(plan.args).toContain("--network");
     expect(plan.args).toContain("bridge");
     expect(plan.args).toContain("--add-host=host.docker.internal:host-gateway");
@@ -130,8 +146,15 @@ describe("Docker runtime builder", () => {
       }),
     });
     disposables.push(bridgePlan.dispose);
+    expect(bridgePlan.args).toContain("/repo:/workspace");
     expect(bridgePlan.args).toContain("bridge");
     expect(bridgePlan.args).toContain("--add-host=host.docker.internal:host-gateway");
     expect(bridgePlan.args).not.toContain("--dns=127.0.0.1");
+  });
+
+  it("handles empty image inspection safely without throwing", async () => {
+    const emptyRes = await inspectDockerImage("   ");
+    expect(emptyRes.exists).toBe(false);
+    expect(emptyRes.reason).toBeTruthy();
   });
 });

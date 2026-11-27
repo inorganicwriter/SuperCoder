@@ -306,7 +306,7 @@ export const zhCN = {
   "agent.dockerReadOnlyRoot": "只读根文件系统（仅 /workspace 与 /tmp 可写）",
   "agent.dockerMounts": "额外挂载卷（每行 host:container[:ro|rw]）",
   "agent.dockerMountsPlaceholder": "/path/on/host:/mnt/data:ro",
-  "agent.dockerHint": "工作区（或 Worktree）自动挂载到 /workspace；环境变量与密钥通过临时 0600 文件注入，不会出现在命令行参数中。",
+  "agent.dockerHint": "工作区（或 Worktree）自动挂载到 /workspace（只读任务按 :ro 挂载，容器启用 --cap-drop=ALL 降权）；环境变量与密钥通过临时 0600 文件注入，不会出现在命令行参数中。",
   "agent.allowlistPreset": "填入常用域名预设",
   "agent.customTitle": "自定义外部 Agent",
   "agent.customHint": "通过 ACP 或非交互命令行接入更多本地 Agent，支持独立的网络路由与 Worktree 隔离。",

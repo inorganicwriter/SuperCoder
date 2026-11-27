@@ -18,12 +18,19 @@ export interface DockerAvailability {
   readonly reason?: string;
 }
 
+export interface DockerRunSpec extends DockerBackendConfig {
+  /** 只读任务或探测操作时以 `:ro` 挂载工作区，内核级禁止写入。 */
+  readonly workspaceReadOnly?: boolean;
+}
+
+export const SUPER_DOCKER_MANAGED_LABEL = "supercoder.managed=true";
+
 export interface DockerRunPlanInput {
   readonly bin: string;
   readonly args: readonly string[];
   readonly cwd: string;
   readonly env: Readonly<Record<string, string | undefined>>;
-  readonly docker: DockerBackendConfig;
+  readonly docker: DockerRunSpec;
   readonly containerName?: string;
   readonly containerWorkdir?: string;
 }
@@ -53,8 +60,8 @@ export function resolveContainerBinary(bin: string): string {
   return candidate.replace(/\.(exe|cmd|bat)$/i, "");
 }
 
-/** 将指向宿主机回环地址的代理 URL 改写为容器内可访问的 `host.docker.internal`。 */
-export function rewriteProxyUrlForDocker(rawUrl: string): string {
+/** 将指向宿主机回环地址的 URL（代理或本地模型端点）改写为容器内可访问的 `host.docker.internal`。 */
+export function rewriteLoopbackUrlForDocker(rawUrl: string): string {
   const trimmed = rawUrl.trim();
   if (trimmed === "") return trimmed;
   try {
@@ -62,13 +69,18 @@ export function rewriteProxyUrlForDocker(rawUrl: string): string {
     const host = parsed.hostname.toLowerCase().replace(/^\[|\]$/g, "");
     if (host === "127.0.0.1" || host === "localhost" || host === "::1") {
       parsed.hostname = "host.docker.internal";
-      return parsed.toString().replace(/\/$/, "");
+      const out = parsed.toString();
+      return parsed.pathname === "/" && parsed.search === "" && parsed.hash === "" && !trimmed.endsWith("/")
+        ? out.slice(0, -1)
+        : out;
     }
     return trimmed;
   } catch {
     return trimmed;
   }
 }
+
+export const rewriteProxyUrlForDocker = rewriteLoopbackUrlForDocker;
 
 function serializeEnvFile(env: Readonly<Record<string, string | undefined>>): string {
   const lines: string[] = [];
@@ -109,17 +121,27 @@ export function buildDockerRunPlan(input: DockerRunPlanInput): DockerRunPlan {
     throw error;
   }
 
+  const workspaceMount =
+    input.docker.workspaceReadOnly === true
+      ? `${input.cwd}:${workdir}:ro`
+      : `${input.cwd}:${workdir}`;
+
   const args: string[] = [
     "run",
     "--rm",
     "-i",
     "--init",
+    "--cap-drop=ALL",
+    "--security-opt=no-new-privileges:true",
+    "--pids-limit=512",
+    "--label",
+    SUPER_DOCKER_MANAGED_LABEL,
     "--name",
     containerName,
     "--workdir",
     workdir,
     "-v",
-    `${input.cwd}:${workdir}`,
+    workspaceMount,
   ];
 
   if (input.docker.networkIsolation === "none") {

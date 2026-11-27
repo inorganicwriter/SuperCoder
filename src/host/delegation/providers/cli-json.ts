@@ -110,6 +110,7 @@ export class CliJsonProvider implements DelegationProvider {
                 : {
                     docker: {
                       ...request.docker,
+                      workspaceReadOnly: request.mode === "read-only",
                       extraMounts: [
                         ...request.docker.extraMounts,
                         { host: dir, container: containerOutDir, readOnly: false },

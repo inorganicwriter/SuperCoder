@@ -137,7 +137,9 @@ export class ClaudeCodeProvider implements DelegationProvider {
               cwd: request.workspace,
               input: stdin,
               ...(request.env === undefined ? {} : { env: request.env as NodeJS.ProcessEnv }),
-              ...(request.docker === undefined ? {} : { docker: request.docker }),
+              ...(request.docker === undefined
+                ? {}
+                : { docker: { ...request.docker, workspaceReadOnly: request.mode === "read-only" } }),
               ...(this.deps.timeoutMs !== undefined
                 ? { timeoutMs: this.deps.timeoutMs }
                 : { idleTimeoutMs: DEFAULT_TIMEOUT_MS }),

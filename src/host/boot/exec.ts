@@ -11,8 +11,7 @@ import { spawn, spawnSync, type ChildProcess, type SpawnOptions } from "node:chi
 import { accessSync, constants, existsSync, readdirSync, statSync } from "node:fs";
 import { delimiter, dirname, isAbsolute, join } from "node:path";
 import { StringDecoder } from "node:string_decoder";
-import type { DockerBackendConfig } from "../../shared/domain/sandbox.js";
-import { buildDockerRunPlan, type DockerAvailability } from "./docker-runtime.js";
+import { buildDockerRunPlan, type DockerAvailability, type DockerRunSpec } from "./docker-runtime.js";
 
 /** 单个流的输出上限：够放一次验证/JSON 输出，又不至于把内存撑爆。 */
 const DEFAULT_MAX_OUTPUT_BYTES = 4 * 1024 * 1024;
@@ -137,7 +136,7 @@ export interface SpawnSpec {
   readonly cwd: string;
   readonly env?: NodeJS.ProcessEnv;
   readonly stdio?: SpawnOptions["stdio"];
-  readonly docker?: DockerBackendConfig;
+  readonly docker?: DockerRunSpec;
 }
 
 const dockerProcesses = new WeakMap<
@@ -284,7 +283,7 @@ export interface RunOptions {
   readonly onStdout?: (chunk: string) => void;
   /** 输出来自系统命令行工具（where / reg），按控制台代码页解码，见 decodeConsoleOutput。 */
   readonly consoleEncoding?: boolean;
-  readonly docker?: DockerBackendConfig;
+  readonly docker?: DockerRunSpec;
 }
 
 /**
@@ -650,6 +649,35 @@ export async function detectDocker(force = false): Promise<DockerAvailability> {
   }
   dockerDetectCache = { at: Date.now(), value: availability };
   return availability;
+}
+
+export interface DockerImageInspectResult {
+  readonly exists: boolean;
+  readonly id?: string;
+  readonly reason?: string;
+}
+
+/** 检测本地是否存在指定 Docker 镜像（`shell: false`，永不抛异常）。 */
+export async function inspectDockerImage(image: string): Promise<DockerImageInspectResult> {
+  const trimmed = image.trim();
+  if (trimmed === "") {
+    return { exists: false, reason: "镜像名称不能为空" };
+  }
+  try {
+    const result = await runProcess("docker", ["image", "inspect", "--format", "{{.Id}}", trimmed], {
+      cwd: process.cwd(),
+      timeoutMs: 4000,
+    });
+    const id = result.stdout.trim();
+    if (result.code === 0 && !result.timedOut && !result.aborted && id !== "") {
+      return { exists: true, id };
+    }
+    const reason = (result.stderr.trim() || result.stdout.trim() || "本地未找到该镜像").slice(0, 200);
+    return { exists: false, reason };
+  } catch (error) {
+    const msg = error instanceof Error ? error.message : String(error);
+    return { exists: false, reason: msg.slice(0, 200) };
+  }
 }
 
 /**

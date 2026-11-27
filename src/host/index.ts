@@ -15,7 +15,7 @@ import { resultErr, type RpcResponse } from "../shared/protocol/rpc.js";
 import type { SessionEvent } from "../shared/session/events.js";
 import { ensureDir, writeJsonAtomic } from "./boot/atomic.js";
 import { DEFAULT_SETTINGS, SettingsStore, WorkspacesStore } from "./boot/config.js";
-import { detectDocker, warmUninstallCache } from "./boot/exec.js";
+import { detectDocker, inspectDockerImage, warmUninstallCache } from "./boot/exec.js";
 import { fail, messageOf } from "./boot/failure.js";
 import { createLogger, type Logger } from "./boot/logger.js";
 import { acquireInstanceLock, type LockOutcome } from "./boot/lock.js";
@@ -562,9 +562,44 @@ export async function startHost(options: HostOptions = {}): Promise<RunningHost>
       fail("storage_failed", messageOf(error));
     }
   });
-  router.register("agent.sandbox.test", (params) => {
+  router.register("agent.sandbox.test", async (params) => {
     select.family(params.agentId);
     const profile = params.sandbox ?? agentSandboxes.get(params.agentId);
+    if (profile.backend.kind === "docker" && profile.backend.docker !== undefined) {
+      const docker = await detectDocker(true);
+      if (!docker.available) {
+        return {
+          ok: false,
+          target: params.targetUrl,
+          mode: profile.network.mode,
+          message: `Docker 未就绪：${docker.reason ?? "请先启动 Docker 服务"}`,
+        };
+      }
+      const image = profile.backend.docker.image.trim();
+      const inspected = await inspectDockerImage(image);
+      if (!inspected.exists) {
+        return {
+          ok: false,
+          target: params.targetUrl,
+          mode: profile.network.mode,
+          message: `本地未找到 Docker 镜像 ${image}，请先拉取或构建：${inspected.reason ?? ""}`.trim(),
+        };
+      }
+      if (profile.backend.docker.networkIsolation === "none" || profile.network.mode === "offline") {
+        return {
+          ok: false,
+          target: params.targetUrl,
+          mode: profile.network.mode,
+          blockedByRule: true,
+          message: `Docker 镜像已就绪（${image}）；当前已启用完全断网（--network none），所有出网请求将被内核阻断`,
+        };
+      }
+      const netResult = await networkProxy.testNetwork(profile, params.targetUrl);
+      return {
+        ...netResult,
+        message: `Docker 镜像已就绪（${image}）；${netResult.message}`,
+      };
+    }
     return networkProxy.testNetwork(profile, params.targetUrl);
   });
   router.register("agent.sandbox.allowHost", (params) => {

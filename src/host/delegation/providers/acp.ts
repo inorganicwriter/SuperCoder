@@ -28,6 +28,7 @@ import type { DockerBackendConfig } from "../../../shared/domain/sandbox.js";
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { rewriteLoopbackUrlForDocker, type DockerRunSpec } from "../../boot/docker-runtime.js";
 import { sanitizedEnv, spawnChild, whichBinary } from "../../boot/exec.js";
 import { messageOf } from "../../boot/failure.js";
 import { selectAnswer, type AnswerCandidate } from "../answer.js";
@@ -93,20 +94,24 @@ export class AcpProvider implements DelegationProvider {
     workspace: string,
     modelConfig?: AgentModelConfig,
     runtimeEnv?: Record<string, string | undefined>,
-    docker?: DockerBackendConfig,
+    docker?: DockerRunSpec,
   ): JsonRpcTransport {
     const modelOverrides: Record<string, string> = {};
     let args = this.extraArgs;
     let patchDir: string | undefined;
     let effectiveDocker = docker;
     if (modelConfig) {
+      const effectiveBaseUrl =
+        effectiveDocker !== undefined && effectiveDocker.networkIsolation !== "none"
+          ? rewriteLoopbackUrlForDocker(modelConfig.baseUrl)
+          : modelConfig.baseUrl;
       modelOverrides["SUPERCODER_AGENT_API_KEY"] = modelConfig.apiKey;
       if (this.id === "deepseek-harness" && !this.deps.createTransport) {
         patchDir = mkdtempSync(join(tmpdir(), "supercoder-dsh-"));
         const patchFile = join(patchDir, "profile.json");
         try {
           writeFileSync(patchFile, JSON.stringify([
-            { id: "llm-pi-ai", config: { providers: { supercoder: { api: "openai-completions", baseURL: modelConfig.baseUrl, apiKeyEnv: "SUPERCODER_AGENT_API_KEY", models: [{ id: modelConfig.model }] } } } },
+            { id: "llm-pi-ai", config: { providers: { supercoder: { api: "openai-completions", baseURL: effectiveBaseUrl, apiKeyEnv: "SUPERCODER_AGENT_API_KEY", models: [{ id: modelConfig.model }] } } } },
             { id: "acp", config: { provider: "supercoder", model: modelConfig.model } },
           ]), { mode: 0o600 });
         } catch (error) { rmSync(patchDir, { recursive: true, force: true }); throw error; }
@@ -123,7 +128,7 @@ export class AcpProvider implements DelegationProvider {
         }
         args = [...this.extraArgs.slice(0, -1), "--profile", "acp", "--patch", patchArg];
       } else if (this.id === "opencode") modelOverrides["OPENCODE_CONFIG_CONTENT"] = JSON.stringify({
-        provider: { supercoder: { name: "SuperCoder", npm: "@ai-sdk/openai-compatible", options: { baseURL: modelConfig.baseUrl, apiKey: "{env:SUPERCODER_AGENT_API_KEY}" }, models: { [modelConfig.model]: { name: modelConfig.model, tool_call: true } } } },
+        provider: { supercoder: { name: "SuperCoder", npm: "@ai-sdk/openai-compatible", options: { baseURL: effectiveBaseUrl, apiKey: "{env:SUPERCODER_AGENT_API_KEY}" }, models: { [modelConfig.model]: { name: modelConfig.model, tool_call: true } } } },
       });
     }
     // `runtimeEnv` 里的用户沙箱环境变量应覆盖 `this.deps.env` 的默认兜底（例如用户自定义 `DSH_HOME`），
@@ -168,8 +173,9 @@ export class AcpProvider implements DelegationProvider {
 
   async listModels(workspace: string): Promise<ProviderModel[]> {
     const compiled = this.deps.createTransport === undefined && this.deps.compileEnv ? await this.deps.compileEnv() : undefined;
-    const transport = this.transport(workspace, undefined, compiled?.env, compiled?.docker);
-    const rpcCwd = compiled?.docker !== undefined ? "/workspace" : workspace;
+    const dockerSpec: DockerRunSpec | undefined = compiled?.docker ? { ...compiled.docker, workspaceReadOnly: true } : undefined;
+    const transport = this.transport(workspace, undefined, compiled?.env, dockerSpec);
+    const rpcCwd = dockerSpec !== undefined ? "/workspace" : workspace;
     try {
       await this.initialize(transport);
       const session = asRecord(await transport.request("session/new", { cwd: rpcCwd, mcpServers: [] }));
@@ -227,8 +233,9 @@ export class AcpProvider implements DelegationProvider {
 
   async listSessions(workspace: string, page: ProviderPage): Promise<ProviderSessionSummary[]> {
     const compiled = this.deps.createTransport === undefined && this.deps.compileEnv ? await this.deps.compileEnv() : undefined;
-    const transport = this.transport(workspace, undefined, compiled?.env, compiled?.docker);
-    const rpcCwd = compiled?.docker !== undefined ? "/workspace" : workspace;
+    const dockerSpec: DockerRunSpec | undefined = compiled?.docker ? { ...compiled.docker, workspaceReadOnly: true } : undefined;
+    const transport = this.transport(workspace, undefined, compiled?.env, dockerSpec);
+    const rpcCwd = dockerSpec !== undefined ? "/workspace" : workspace;
     try {
       const capabilities = await this.initialize(transport);
       if (asRecord(capabilities["sessionCapabilities"])["list"] === undefined) return [];
@@ -241,7 +248,8 @@ export class AcpProvider implements DelegationProvider {
 
   async readSession(sessionId: string, page: ProviderPage): Promise<DelegationEvent[]> {
     const compiled = this.deps.createTransport === undefined && this.deps.compileEnv ? await this.deps.compileEnv() : undefined;
-    const transport = this.transport(process.cwd(), undefined, compiled?.env, compiled?.docker);
+    const dockerSpec: DockerRunSpec | undefined = compiled?.docker ? { ...compiled.docker, workspaceReadOnly: true } : undefined;
+    const transport = this.transport(process.cwd(), undefined, compiled?.env, dockerSpec);
     try {
       const capabilities = await this.initialize(transport);
       const sessionCapabilities = asRecord(capabilities["sessionCapabilities"]);
@@ -271,8 +279,11 @@ export class AcpProvider implements DelegationProvider {
     const startedAt = Date.now();
     if (request.modelConfig && this.id !== "opencode" && this.id !== "deepseek-harness") return { status: "failed", diagnostic: diagnostic("handshake", "protocol", "此 ACP Agent 不支持注入 SuperCoder 模型档案"), durationMs: 0 };
     // 只读请求照常执行：可写权限本就更高，ACP 没有可强制的只读沙箱，不因此拒绝任务。
-    const transport = this.transport(request.workspace, request.modelConfig, request.env, request.docker);
-    const rpcCwd = request.docker !== undefined ? "/workspace" : request.workspace;
+    const dockerSpec: DockerRunSpec | undefined = request.docker
+      ? { ...request.docker, workspaceReadOnly: request.mode === "read-only" }
+      : undefined;
+    const transport = this.transport(request.workspace, request.modelConfig, request.env, dockerSpec);
+    const rpcCwd = dockerSpec !== undefined ? "/workspace" : request.workspace;
     const candidates: AnswerCandidate[] = [];
     // ACP 的 chunk 是增量：拼成一条完整答案再交给  选择，否则只取到第一段。
     let answerBuffer = "";

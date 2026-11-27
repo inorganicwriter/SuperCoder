@@ -306,7 +306,7 @@ export const en: Record<LocaleKey, string> = {
   "agent.dockerReadOnlyRoot": "Read-only rootfs (writable /workspace and /tmp only)",
   "agent.dockerMounts": "Extra mounts (one host:container[:ro|rw] per line)",
   "agent.dockerMountsPlaceholder": "/path/on/host:/mnt/data:ro",
-  "agent.dockerHint": "Workspace (or worktree) mounts to /workspace; env vars and secrets are injected via an ephemeral 0600 env-file, never CLI args.",
+  "agent.dockerHint": "Workspace (or worktree) mounts to /workspace (:ro for read-only tasks, with --cap-drop=ALL); env vars and secrets are injected via an ephemeral 0600 env-file, never CLI args.",
   "agent.allowlistPreset": "Fill recommended preset",
   "agent.customTitle": "Custom external agents",
   "agent.customHint": "Add local ACP or CLI agents; each inherits independent network routing and worktree isolation.",
